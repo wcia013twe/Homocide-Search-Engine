@@ -6,7 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from research_app import datasets, library, projects, search, usage
+from research_app import datasets, guide, library, projects, search, usage
 from research_app.repository import ConflictError, Repository
 from research_app.theme import apply_theme
 
@@ -56,7 +56,7 @@ def save():
 with st.sidebar:
     st.title("Homicide Research")
     st.caption("Research workspace")
-    page = st.radio("Workspace navigation", ["Search", "Datasets", "Library", "Projects", "Usage"], label_visibility="collapsed", key="nav_page")
+    page = st.radio("Workspace navigation", ["Search", "Datasets", "Library", "Projects", "Usage", "User Guide"], label_visibility="collapsed", key="nav_page")
     st.divider()
     st.caption("UI preview · fictional sample records")
     st.caption("Search, extraction, and AI analysis services are not connected yet.")
@@ -92,4 +92,4 @@ if st.session_state.get("workspace_notice"):
 if st.session_state.get("workspace_error"):
     st.error(st.session_state.pop("workspace_error"))
 
-{"Search": search, "Datasets": datasets, "Library": library, "Projects": projects, "Usage": usage}[page].render(st.session_state.workspace, save)
+{"Search": search, "Datasets": datasets, "Library": library, "Projects": projects, "Usage": usage, "User Guide": guide}[page].render(st.session_state.workspace, save)
