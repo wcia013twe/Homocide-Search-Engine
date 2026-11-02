@@ -15,7 +15,7 @@ Social science researchers discovering, coding, verifying, and analyzing homicid
 Support discovery → evidence collection → verification → structured datasets → analysis in one persistent research workspace.
 
 ## Operating Context
-Search contains Discovery and Research modes. Datasets contains Overview, Incidents, Sources, Variables, Runs, Evaluation, and Settings. Library holds shared source material. Projects groups datasets and supports analysis. Usage shows work, coverage, and costs.
+Search is the current workflow. It submits a deliberate web query to Brave or Exa and presents the returned sources. Usage shows fictional seeded workspace coverage and costs; the User Guide documents current limits.
 
 ## Capabilities and Constraints
 This pass implements the UI and its data contract first. Live web discovery, document parsing, model extraction, and natural-language analysis are future adapters. Preview fixtures must be visibly fictional. Research corrections and approvals must retain evidence and audit history. Databricks workspace authentication supplies deployed identity. Persistent hosted storage beyond app lifecycle is an explicit next integration, with snapshot export/import in the scaffold.

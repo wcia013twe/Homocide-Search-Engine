@@ -1,0 +1,13 @@
+# Copy to app.yaml in a separate deployment source folder with research_app/ and requirements.txt.
+command: ['python', '-m', 'research_app.agent_server']
+env:
+  - name: EXA_API_KEY
+    valueFrom: exa_secret
+  - name: BRAVE_API_KEY
+    valueFrom: brave_secret
+  - name: HR_SEARCH_AUDIT_VOLUME
+    valueFrom: search_audit_volume
+  - name: HR_SEARCH_AUDIT_WAREHOUSE_ID
+    valueFrom: search_audit_warehouse
+  - name: HR_RESEARCH_MODEL_ENDPOINT
+    valueFrom: research_model

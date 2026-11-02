@@ -6,3 +6,7 @@ env:
     value: 'true'
   - name: HR_DATA_DIR
     value: '/tmp/homicide-research'
+  - name: BRAVE_API_KEY
+    valueFrom: brave_secret
+  - name: EXA_API_KEY
+    valueFrom: exa_secret

@@ -49,10 +49,30 @@ Proposed Delta entities:
 - `evidence_spans` holds document-version ID, text offsets, quotation, locator/page, and extraction version. `claims` holds source assertions with typed values and certainty. `claim_evidence` is the many-to-many link between claims and spans.
 - `codebooks`, `codebook_versions`, and `variables` define immutable field semantics. `dataset_codebooks` pins versions.
 - `incident_field_decisions` stores researcher-selected typed values/statuses and references codebook versions; `decision_evidence` and `decision_claims` retain supporting and conflicting evidence. `review_events` append corrections with before/after snapshots and actor provenance.
-- `search_runs`, `search_results`, `dataset_requests`, `processing_runs`, and `usage_events` retain query, scope, provider, idempotency key, timestamps, stage status, error category, retry count, and cost attribution.
+- `search_runs` stores one deliberate provider request, including provider request ID, query, request options, requester, timestamps, status, cost/timing, warnings/notices, raw artifact paths, and response hash. `search_results` stores one returned URL per run with rank, provider metadata, excerpt/highlights, raw result JSON, and disposition. The initial migration is `sql/001_search_audit.sql`.
+- `dataset_requests`, `processing_runs`, and `usage_events` retain their own request, status, retry, and cost attribution.
 
 The logical UI hierarchy is a navigation aid, not a strict ownership tree: variables are codebook definitions; evidence supports claims; incidents can participate in multiple datasets. Do not duplicate source documents solely to represent membership.
 
 Production ingestion should use request idempotency keys scoped by tenant, canonical URL plus fetch/version metadata, and cryptographic content hashes. Repeated requests must reuse successful artifacts while recording retries. Document deduplication and incident entity resolution are different processes; matching article text must not automatically merge incidents. Preserve candidate links and human merge/split decisions.
 
 Delta commands should enforce expected entity versions and atomic updates appropriate to the chosen serving architecture. Delta optimistic concurrency alone does not supply application-level compare-and-swap for arbitrary UI edits; verify row versions and affected results. For multi-table changes, use a transactional serving store or append a durable command/event before materializing Delta views. Authorization, audit retention, deletion policies, search/provider secrets, real usage billing, and durable job execution remain backend integration work.
+
+
+## Identifying leads (explore-search)
+
+Workspace snapshots may include an optional `leads` list. Existing snapshots without
+this collection still load. Each lead stores a stable ID, detail type and verbatim
+identifying detail, source URL/title, exact supporting excerpt, originating query,
+optional search audit run ID, creation time and `Unverified lead` status. One useful
+detail is sufficient; no fixed name/place/date combination or official number is
+required. Details are validated against the supplied search excerpt before the
+entire batch is saved through the existing workspace repository. Exact repeated
+source/type/detail combinations retain their ID; they are not added again. This
+does not perform incident matching or merge details into confirmed cases.
+
+Choose **explore-search** on Search to run this step. It uses the existing provider
+and search audit paths and reuses `DatabricksClaimExtractor` with a discovery
+prompt and `HR_RESEARCH_MODEL_ENDPOINT`. These are excerpt-derived leads; no full
+article fetch or incident-loop handoff is performed yet. Workspace storage retains
+the existing per-user, optimistic-revision and hosted-lifecycle limits.

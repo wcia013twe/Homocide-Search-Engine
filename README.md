@@ -1,6 +1,6 @@
 # Homicide Research Platform
 
-A UI-first researcher workspace built with Streamlit for Databricks Apps. Includes Search, Datasets (seven tabs), Library, Projects, and Usage. Example incidents and documents are entirely fictional and labeled in the app.
+A small Streamlit researcher workspace for Databricks Apps. It currently provides live web search, search auditing, a usage summary, and a user guide. The seeded usage data is fictional and labeled in the app.
 
 ## Run locally
 
@@ -12,15 +12,16 @@ python -m venv .venv
 
 ## What this scaffold does
 
-- Filter sample discovery sources, preview evidence, and collect sources into datasets.
-- Inspect and correct structured incident fields alongside evidence, with review reasons and audit history.
-- Manage dataset metadata and codebook definitions; inspect runs, missingness, and uncertainty.
-- Upload UTF-8 text/Markdown documents and link them to datasets.
-- Group datasets into projects, compare coverage, and export CSV.
-- Inspect recorded activity and costs when available; absent metering is labeled unmetered.
+- Search the live web with Brave or Exa and inspect returned sources.
+- Record each completed search in a configured audit volume and SQL tables.
+- Inspect fictional seeded usage and coverage data.
 - Download and restore a validated workspace snapshot.
 
-Live web searches, PDF extraction, model calls, Text-to-SQL, collaboration permissions, and the Databricks ingestion pipeline are not connected. UI preview results are never represented as completed external operations. Review coverage is not an extraction-accuracy measurement.
+Brave and Exa live web search are available when their API keys are configured as app secrets. The provider selector uses one normalized result shape and preserves the provider's raw response when the search-audit resources are configured. Dataset management, document ingestion, extraction, analysis, collaboration permissions, and the Databricks ingestion pipeline are not connected.
+
+## Search audit setup
+
+The current workspace already has `search_runs`, `search_results`, and the `sources_documents` volume. Apply [`sql/003_extend_existing_search_tables.sql`](sql/003_extend_existing_search_tables.sql) once to extend those existing tables. Fresh workspaces use migrations 001 and 002 instead; do not apply both paths. In the Databricks App resource settings, attach `sources_documents` as a read/write UC volume resource with key `search_audit_volume`, and a SQL warehouse with key `search_audit_warehouse`. Add the existing provider secrets with keys `brave_secret` and `exa_secret`. The app records raw request/response JSON in the volume and writes one row to `search_runs` plus one row per URL to `search_results`. API keys are never written to artifacts.
 
 ## State and identity
 

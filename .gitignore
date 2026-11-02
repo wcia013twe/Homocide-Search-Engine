@@ -9,3 +9,11 @@ __pycache__/
 .impeccable/
 test-results/
 .DS_Store
+agent-build/
+local-audit/
+.venv-wsl/
+dev/bin/
+dev/lib/
+dev/lib64
+dev/include/
+dev/pyvenv.cfg

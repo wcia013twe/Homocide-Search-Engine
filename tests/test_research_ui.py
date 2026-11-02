@@ -2,13 +2,14 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from streamlit.testing.v1 import AppTest
 
-from research_app.data import seed_workspace, validate_workspace
-from research_app.library import uploaded_source
+from research_app.search_audit import AuditConfigurationError
+from research_app.search_provider import SearchResponse, SearchResult
 from research_app.repository import Repository
+
 
 
 class ResearchUITests(unittest.TestCase):
@@ -24,86 +25,101 @@ class ResearchUITests(unittest.TestCase):
     def assert_clean(self):
         self.assertEqual(len(self.app.exception), 0, str(self.app.exception))
         self.assertEqual(len(self.app.error), 0, str(self.app.error))
-        validate_workspace(self.app.session_state.workspace)
 
-    def assert_saved(self):
-        self.assert_clean()
-        repository = Repository(Path(self.directory.name) / "workspaces.sqlite3", self.app.session_state.research_user)
-        saved, revision = repository.load()
-        self.assertEqual(saved, self.app.session_state.workspace)
-        self.assertEqual(revision, self.app.session_state.revision)
+    def test_only_live_navigation_is_shown(self):
+        self.assertEqual(list(self.app.radio(key="nav_page").options), ["Search", "Usage", "User Guide"])
 
-    def navigate(self, page):
-        self.app.radio(key="nav_page").set_value(page).run()
-        self.assert_clean()
+    def test_scoped_search_sends_and_audits_the_displayed_query(self):
+        expected = "homicide Brazos County Texas 2023"
+        response = SearchResponse("exa", expected, {}, {}, ())
+        with patch("research_app.search.search_web", return_value=response) as search, patch(
+            "research_app.search.SearchAuditStore.from_environment"
+        ) as audit:
+            self.app.text_input(key="search_live_query").set_value(" homicide ")
+            self.app.text_input(key="search_live_state").set_value(" Texas ")
+            self.app.text_input(key="search_live_county").set_value(" Brazos ")
+            self.app.number_input(key="search_live_year").set_value(2023)
+            self.app.run()
+            search.assert_not_called()
+            self.assertIn(f"Search query: {expected}", [item.value for item in self.app.text])
+            self.app.button(key="search_live_submit").click().run()
+            self.assert_clean()
+            search.assert_called_once_with("Exa", expected)
+            audit.return_value.record.assert_called_once_with(response, self.app.session_state["research_user"])
 
-    def test_collect_new_dataset_and_duplicate_collection(self):
-        app = self.app
-        app.text_input(key="search_discovery_query").set_value("Cedar").run()
-        result_keys = [c.key for c in app.checkbox if c.key.startswith("search_pick_")]
-        self.assertEqual(len(result_keys), 3)
-        app.checkbox(key=result_keys[0]).check().run()
-        app.text_input(key="search_dataset_name").set_value("Cedar evidence")
-        app.button(key="search_collect").click().run()
-        self.assert_saved()
-        dataset = app.session_state.workspace["datasets"][-1]
-        self.assertEqual(dataset["name"], "Cedar evidence")
-        self.assertEqual(len(dataset["source_ids"]), 1)
-        self.assertEqual(dataset["incident_ids"], [])
-        app.selectbox(key="search_destination").set_value(dataset["id"]).run()
-        app.button(key="search_collect").click().run()
-        self.assert_saved()
-        self.assertEqual(app.session_state.workspace["runs"][-1]["source_count"], 0)
-        self.assertEqual(len(app.session_state.workspace["datasets"][-1]["source_ids"]), 1)
-        app.selectbox(key="search_research_scope").set_value(dataset["id"]).run()
-        self.assert_clean()
+    def test_unfiltered_search_and_audit_configuration_message(self):
+        response = SearchResponse("exa", "research methods", {}, {}, ())
+        with patch("research_app.search.search_web", return_value=response) as search, patch(
+            "research_app.search.SearchAuditStore.from_environment", side_effect=AuditConfigurationError()
+        ):
+            self.app.text_input(key="search_live_query").set_value(" research methods ").run()
+            self.app.button(key="search_live_submit").click().run()
+            self.assert_clean()
+            search.assert_called_once_with("Exa", "research methods")
+            self.assertTrue(any("Configure the audit volume" in item.value for item in self.app.caption))
 
-    def test_projects_create_group_and_export(self):
-        self.navigate("Projects")
-        app = self.app
-        self.assertTrue(any(d.proto.label.startswith("Export project") and d.proto.url.endswith(".csv") for d in app.get("download_button")))
-        app.text_input(key="proj_new_name").set_value("County study")
-        app.text_area(key="proj_new_description").set_value("Compare evidence coverage")
-        app.button(key="FormSubmitter:proj_create_form-Create project").click().run()
-        self.assert_saved()
-        project = app.session_state.workspace["projects"][-1]
-        app.selectbox(key="proj_selected").set_value(project["id"]).run()
-        app.multiselect(key=f"proj_datasets_{project['id']}").set_value(["dataset-texas-2023"])
-        app.button(key=f"FormSubmitter:proj_datasets_form_{project['id']}-Save dataset selection").click().run()
-        self.assert_saved()
-        self.assertIn(project["id"], app.session_state.workspace["datasets"][0]["project_ids"])
-        app.selectbox(key="proj_dimension").set_value("Year").run()
-        self.assert_clean()
-        self.assertTrue(any(d.proto.label.startswith("Export project") for d in app.get("download_button")))
+    def test_filters_alone_do_not_submit_search(self):
+        self.app.text_input(key="search_live_county").set_value("Brazos").run()
+        self.assertTrue(self.app.button(key="search_live_submit").disabled)
 
-    def test_library_filter_link_and_usage(self):
-        self.navigate("Library")
-        app = self.app
-        app.text_input(key="lib_query").set_value("follow-up").run()
-        self.assertEqual(len(app.selectbox(key="lib_preview").options), 2)
-        app.text_input(key="lib_query").set_value("").run()
-        app.selectbox(key="lib_preview").set_value("source-001").run()
-        app.selectbox(key="lib_dataset_source-001").set_value("dataset-evidence-review")
-        app.button(key="lib_link_source-001").click().run()
-        self.assert_saved()
-        self.assertIn("dataset-evidence-review", app.session_state.workspace["sources"][0]["dataset_ids"])
-        self.navigate("Usage")
-        self.assertEqual(app.dataframe[0].value.iloc[1]["Coverage"], "2 of 8")
-        app.selectbox(key="usage_status").set_value("Completed").run()
-        self.assert_clean()
+    def test_county_suffix_is_not_duplicated(self):
+        from research_app.search import scoped_query
 
-    def test_upload_validation_and_repository_roundtrip(self):
-        source = uploaded_source(b"\xef\xbb\xbfAn evidence transcript", "transcript.txt", "Transcript")
-        workspace = seed_workspace()
-        workspace["sources"].append(source)
-        validate_workspace(workspace)
-        repository = Repository(Path(self.directory.name) / "upload.sqlite3", "test")
-        _, revision = repository.load()
-        repository.save(workspace, revision)
-        self.assertEqual(repository.load()[0]["sources"][-1]["text"], "An evidence transcript")
-        for invalid in (b"\xff", b"  ", b"x" * (2 * 1024 * 1024 + 1)):
-            with self.assertRaises(ValueError):
-                uploaded_source(invalid, "invalid.txt")
+        self.assertEqual(scoped_query("homicide", "Texas", "Brazos County", 2023),
+                         "homicide Brazos County Texas 2023")
+        self.assertEqual(scoped_query("homicide", year=2023), "homicide 2023")
+
+    def test_explore_search_saves_one_detail_and_keeps_it_after_rerun(self):
+        response = SearchResponse("exa", "homicide", {}, {}, (
+            SearchResult("Fictional report", "https://example.invalid/report", "Found on Example Street."),))
+        model = Mock(return_value=[{"claim_id": "street", "field": "location", "value": "Example Street",
+                                    "source_id": "1", "passage": "Found on Example Street."}])
+        with patch("research_app.search.search_web", return_value=response) as search, patch(
+            "research_app.search.lead_extractor", return_value=model
+        ), patch("research_app.search.SearchAuditStore.from_environment") as audit:
+            audit.return_value.record.return_value.search_run_id = "audit-run"
+            self.app.text_input(key="search_live_query").set_value("homicide")
+            self.app.radio(key="search_live_mode").set_value("explore-search").run()
+            self.app.button(key="search_live_submit").click().run()
+            self.assert_clean()
+            leads = self.app.session_state["workspace"]["leads"]
+            self.assertEqual(len(leads), 1)
+            self.assertEqual(leads[0]["identifying_detail"], "Example Street")
+            user = self.app.session_state["research_user"]
+            repo = Repository(Path(self.directory.name) / "workspaces.sqlite3", user)
+            self.assertEqual(repo.load()[0]["leads"], leads)
+            self.app.run()
+            model.assert_called_once()
+            search.assert_called_once()
+            self.app.button(key="search_live_submit").click().run()
+            self.assert_clean()
+            self.assertEqual(len(repo.load()[0]["leads"]), 1)
+
+    def test_explore_search_missing_model_does_not_spend_a_search(self):
+        with patch.dict(os.environ, {"HR_RESEARCH_MODEL_ENDPOINT": ""}), patch(
+            "research_app.search.search_web"
+        ) as search:
+            self.app.text_input(key="search_live_query").set_value("homicide")
+            self.app.radio(key="search_live_mode").set_value("explore-search").run()
+            self.app.button(key="search_live_submit").click().run()
+            self.assertEqual(len(self.app.exception), 0)
+            self.assertIn("HR_RESEARCH_MODEL_ENDPOINT", self.app.error[0].value)
+            search.assert_not_called()
+
+    def test_explore_search_invalid_evidence_does_not_save_leads(self):
+        response = SearchResponse("exa", "homicide", {}, {}, (
+            SearchResult("Fictional report", "https://example.invalid/report", "No identifying detail."),))
+        model = Mock(return_value=[{"claim_id": "bad", "field": "location", "value": "Invented Street",
+                                    "source_id": "1", "passage": "Invented Street"}])
+        with patch("research_app.search.search_web", return_value=response), patch(
+            "research_app.search.lead_extractor", return_value=model
+        ), patch("research_app.search.SearchAuditStore.from_environment"):
+            self.app.text_input(key="search_live_query").set_value("homicide")
+            self.app.radio(key="search_live_mode").set_value("explore-search").run()
+            self.app.button(key="search_live_submit").click().run()
+            self.assertEqual(len(self.app.exception), 0)
+            self.assertEqual(len(self.app.error), 1)
+            self.assertNotIn("leads", self.app.session_state["workspace"])
 
 
 if __name__ == "__main__":

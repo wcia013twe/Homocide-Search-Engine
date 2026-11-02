@@ -1,108 +1,90 @@
-"""Discovery preview and persistent workspace search."""
-from datetime import datetime, timezone
-from uuid import uuid4
+"""Live web search."""
+
+import requests
 import streamlit as st
 
-
-def _now():
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _preview(source):
-    st.write(source.get("text") or source.get("snippet") or "No extracted text is available.")
-    url = source.get("url", "")
-    if url.startswith(("https://", "http://")):
-        st.link_button("Open original source", url)
+from research_app.providers import PROVIDERS, search_web
+from research_app.explore_search import extract_leads, lead_extractor
+from research_app.search_audit import AuditConfigurationError, SearchAuditStore
+def scoped_query(query: str, state: str = "", county: str = "", year: int | None = None) -> str:
+    county = county.strip()
+    if county and not county.lower().endswith(" county"):
+        county += " County"
+    parts = (query.strip(), county, state.strip(), str(year) if year is not None else "")
+    return " ".join(part for part in parts if part)
 
 
 def render(workspace: dict, save):
     st.title("Search")
-    st.caption("Discover sources, collect evidence, and revisit your research.")
-    discovery, research = st.tabs(["Discovery", "Research"])
-    with discovery:
-        st.info("Preview mode · Search the fictional sample sources below. External discovery and extraction are not connected.")
-        query = st.text_input("Search sample sources", placeholder="Keywords, place, or case details", key="search_discovery_query")
-        c1, c2, c3 = st.columns([2, 1, 1])
-        location = c1.text_input("Location", placeholder="Texas or county", key="search_location")
-        start = c2.date_input("Published from", value=None, key="search_start")
-        end = c3.date_input("Published through", value=None, key="search_end")
-        if start and end and start > end:
-            st.error("Choose an end date on or after the start date.")
-            matches = []
-        else:
-            matches = []
-            for source in workspace.get("sources", []):
-                # Uploaded researcher documents belong to Research, not discovery fixtures.
-                if source.get("publisher") == "Researcher upload":
-                    continue
-                corpus = " ".join(str(source.get(k, "")) for k in ("title", "snippet", "text", "publisher")).lower()
-                published = source.get("published_at", "")[:10]
-                if query and not all(word in corpus for word in query.lower().split()):
-                    continue
-                if location and location.lower() not in corpus:
-                    continue
-                if start and (not published or published < start.isoformat()):
-                    continue
-                if end and (not published or published > end.isoformat()):
-                    continue
-                matches.append(source)
-        st.caption(f"{len(matches)} matching sample sources")
-        selected = []
-        for source in matches:
-            with st.container(border=True):
-                if st.checkbox(source["title"], key=f"search_pick_{source['id']}"):
-                    selected.append(source)
-                st.caption(f"{source.get('publisher', 'Unknown publisher')} · {source.get('published_at', '')[:10] or 'Date unknown'}")
-                st.write(source.get("snippet", ""))
-                with st.expander("Preview evidence"):
-                    _preview(source)
-        if not matches:
-            st.write("No sources match these filters. Try fewer keywords or a wider date range.")
-        st.subheader("Collect selected sources")
-        datasets = workspace.get("datasets", [])
-        lookup = {d["id"]: d for d in datasets}
-        destination = st.selectbox("Save to dataset", ["new"] + list(lookup), format_func=lambda x: "Create a new dataset" if x == "new" else lookup[x]["name"], key="search_destination")
-        name = st.text_input("New dataset name", key="search_dataset_name") if destination == "new" else ""
-        if st.button("Collect sources", type="primary", disabled=not selected, key="search_collect"):
-            if destination == "new" and not name.strip():
-                st.error("Enter a name for the new dataset.")
-            else:
-                if destination == "new":
-                    dataset = {"id": str(uuid4()), "name": name.strip(), "description": "", "project_ids": [], "incident_ids": [], "source_ids": [], "status": "Draft", "created_at": _now()}
-                    workspace.setdefault("datasets", []).append(dataset)
-                else:
-                    dataset = lookup[destination]
-                added = 0
-                for source in selected:
-                    if source["id"] not in dataset.setdefault("source_ids", []):
-                        dataset["source_ids"].append(source["id"])
-                        added += 1
-                    if dataset["id"] not in source.setdefault("dataset_ids", []):
-                        source["dataset_ids"].append(dataset["id"])
-                workspace.setdefault("runs", []).append({"id": str(uuid4()), "dataset_id": dataset["id"], "kind": "sample_collection", "status": "Completed", "started_at": _now(), "source_count": added, "incident_count": 0, "detail": "Sample sources linked by researcher; no external search or extraction performed."})
-                workspace.setdefault("usage_events", []).append({"id": str(uuid4()), "kind": "sample_collection", "at": _now(), "units": added, "cost_usd": None})
-                if save():
-                    st.session_state["workspace_notice"] = f"Collected {added} new sources in {dataset['name']}. Review them in Datasets or Library."
-                    st.rerun()
-    with research:
-        query = st.text_input("Search collected research", placeholder="Incident title or evidence text", key="search_research_query")
-        datasets = {d["id"]: d for d in workspace.get("datasets", [])}
-        scope = st.selectbox("Dataset", ["all"] + list(datasets), format_func=lambda x: "All datasets" if x == "all" else datasets[x]["name"], key="search_research_scope")
-        def matches(item, keys):
-            corpus = " ".join(str(item.get(k, "")) for k in keys).lower()
-            return (scope == "all" or scope in item.get("dataset_ids", [])) and all(w in corpus for w in query.lower().split())
-        incidents = [i for i in workspace.get("incidents", []) if matches(i, ("title", "county", "state"))]
-        sources = [s for s in workspace.get("sources", []) if matches(s, ("title", "text", "snippet"))]
-        st.subheader(f"Incidents · {len(incidents)}")
-        if incidents:
-            st.dataframe([{ "Incident": i["title"], "Date": i.get("date"), "County": i.get("county"), "Review": i.get("review_status")} for i in incidents], hide_index=True, width="stretch")
-            st.caption("Open Datasets → Incidents to inspect and correct a record.")
-        else:
-            st.write("No incidents match. Collect evidence and add incident records in Datasets.")
-        st.subheader(f"Sources · {len(sources)}")
-        for source in sources:
-            with st.expander(source["title"]):
-                st.caption(f"{source.get('publisher', '')} · {source.get('published_at', '')[:10]}")
-                _preview(source)
-        if not sources:
-            st.write("No evidence matches this search. Try a broader query or upload a document in Library.")
+    st.caption("Discover sources on the web.")
+    provider = st.selectbox("Provider", list(PROVIDERS), key="search_live_provider")
+    live_query = st.text_input("Search the web", placeholder="Homicide research methods", key="search_live_query")
+    state_column, county_column, year_column = st.columns(3)
+    state = state_column.text_input("State (optional)", placeholder="Texas", key="search_live_state")
+    county = county_column.text_input("County (optional)", placeholder="Brazos", key="search_live_county")
+    year = year_column.number_input("Incident year (optional)", min_value=1800, max_value=2100,
+                                    value=None, step=1, placeholder="2023", key="search_live_year")
+    query = scoped_query(live_query, state, county, year)
+    st.caption("Filters add search terms. Results may include other locations or years; incident dates need checking.")
+    if live_query.strip() and (state.strip() or county.strip() or year is not None):
+        st.text(f"Search query: {query}")
+    mode = st.radio("Search mode", ["Search web", "explore-search"], horizontal=True, key="search_live_mode")
+    if mode == "explore-search":
+        st.caption("Find and save individual identifying details with their source excerpts. One useful detail is enough; the incident loop has not started.")
+    if st.button(mode, type="primary", disabled=not live_query.strip(), key="search_live_submit"):
+        st.session_state.pop("search_live_lead_notice", None)
+        try:
+            extractor = lead_extractor() if mode == "explore-search" else None
+            with st.spinner(f"Searching {provider}..."):
+                response = search_web(provider, query)
+            st.session_state["search_live_results"] = response
+            record = None
+            try:
+                record = SearchAuditStore.from_environment().record(response, st.session_state["research_user"])
+                st.session_state["search_live_audit"] = f"Recorded search {record.search_run_id}."
+            except AuditConfigurationError:
+                st.session_state["search_live_audit"] = "Configure the audit volume and SQL warehouse to record this search."
+            except Exception:
+                st.session_state["search_live_audit"] = "Search succeeded, but the audit record could not be written."
+            if extractor is not None:
+                with st.spinner("Finding identifying details..."):
+                    leads = extract_leads(response, extractor, record.search_run_id if record else None)
+                existing = workspace.get("leads", [])
+                known = {lead["id"] for lead in existing}
+                new_leads = [lead for lead in leads if lead["id"] not in known]
+                if new_leads:
+                    workspace["leads"] = existing + new_leads
+                    if not save():
+                        return
+                st.session_state["search_live_lead_notice"] = (
+                    f"Saved {len(new_leads)} new identifying leads. Incident loop has not started."
+                    if leads else "No useful identifying details were found in these excerpts. Try another query."
+                )
+        except requests.RequestException:
+            st.error(f"{provider} Search could not complete the request. Try again shortly.")
+        except RuntimeError as exc:
+            st.error(str(exc))
+        except Exception:
+            st.error("Search or lead extraction could not finish. Check the provider and model configuration, then try again.")
+    if st.session_state.get("search_live_audit"):
+        st.caption(st.session_state["search_live_audit"])
+    if st.session_state.get("search_live_lead_notice"):
+        st.info(st.session_state["search_live_lead_notice"])
+    saved_leads = workspace.get("leads", [])
+    if saved_leads:
+        with st.expander(f"Saved identifying leads ({len(saved_leads)})"):
+            st.caption("Provisional details for follow-up searches. Multiple details can refer to the same incident.")
+            for lead in saved_leads:
+                st.write(lead["identifying_detail"])
+                st.caption(f'{lead["detail_type"]} | {lead["status"]} | Search: {lead["search_query"]}')
+                st.text(lead["supporting_excerpt"])
+                st.link_button("Open supporting source", lead["source_url"])
+    live_response = st.session_state.get("search_live_results")
+    for result in live_response.results if live_response else []:
+        with st.container(border=True):
+            st.subheader(result.title)
+            if result.published_date:
+                st.caption(result.published_date)
+            st.write(result.snippet or "No excerpt was returned.")
+            if result.url.startswith(("https://", "http://")):
+                st.link_button("Open result", result.url)

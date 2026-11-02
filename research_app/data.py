@@ -18,8 +18,12 @@ def validate_workspace(workspace: dict) -> None:
         "reviews": "id incident_id field previous_value new_value reason reviewer reviewed_at",
         "usage_events": "id kind at units cost_usd",
     }
-    if not isinstance(workspace, dict) or set(workspace) != set(required):
-        raise ValueError("Snapshot must contain exactly the eight workspace collections.")
+    if (not isinstance(workspace, dict) or not set(required).issubset(workspace)
+            or set(workspace) - (set(required) | {"leads"})):
+        raise ValueError("Snapshot must contain the eight workspace collections and optional leads.")
+    if "leads" in workspace:
+        from research_app.explore_search import validate_saved_leads
+        validate_saved_leads(workspace["leads"])
     indexes = {}
     for collection, fields in required.items():
         rows = workspace[collection]
