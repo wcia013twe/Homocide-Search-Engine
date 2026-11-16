@@ -1,5 +1,25 @@
 # Padmini ai_decide replay — 2026-10-28
 
+## Retry on 2026-11-16 UTC
+
+Reauthenticated the `pc` profile and verified both saved runs and their response
+hashes. The workspace settings API reports `ai_decide` and
+`ai_functions_rest_api` effectively enabled. The existing warehouse is a
+serverless Pro warehouse. Nevertheless, a minimal REST probe returned Internal
+Server Error, and a minimal SQL probe failed with `Endpoint ai_decide is not
+enabled for batch inference in this workspace` (statement
+`01f1e17a-70f9-1b2c-b35f-3a0a4daefcb8`).
+
+The requested replay was attempted again; its first Exa source-value request
+returned Internal Server Error. No decisions were produced, and subsequent steps
+were not run. The saved request and error are in
+`local-audit/decision-replays/20261116T050002Z/`; the minimal REST and SQL probes
+are in `20261116T045836Z/` and `20261116T045900Z/`, respectively. No new
+searches or source fetches were made. The preview being enabled does not establish
+that the backend endpoint is provisioned; the REST error does not establish why
+it failed. Databricks must investigate or enable the service for this workspace
+before the actual ai_decide experiment can complete.
+
 Status: prepared and attempted; no successful ai_decide outputs.
 
 ## Scope and evidence

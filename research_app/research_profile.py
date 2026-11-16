@@ -109,13 +109,13 @@ class DatabricksClaimExtractor:
             "Omit missing or ambiguous facts. Keep competing claims separately. Do not require primary sources.")
         request = {"messages": [{"role": "system", "content": self.instructions or default_instructions},
             {"role": "user", "content": json.dumps({"seed": seed, "sources": sources})}],
-            "max_tokens": 3000, "stream": False, "response_format": {"type": "json_schema", "json_schema": {
+            "max_tokens": 8192, "stream": False, "response_format": {"type": "json_schema", "json_schema": {
                 "name": "incident_claims", "schema": schema}}}
         from urllib.parse import quote
         response = WorkspaceClient().api_client.do("POST", "/serving-endpoints/" + quote(self.endpoint, safe="") + "/invocations", body=request)
         choice = response["choices"][0]
         if choice.get("finish_reason") != "stop":
-            raise ValueError("Claim extraction did not finish successfully.")
+            raise ValueError(f"Claim extraction did not finish successfully (finish_reason={choice.get('finish_reason')!r}).")
         claims = json.loads(choice["message"]["content"])["claims"]
         if any(c["field"] not in self.fields for c in claims):
             raise ValueError("Extractor returned an unexpected field.")
