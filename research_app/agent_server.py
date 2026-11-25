@@ -22,6 +22,12 @@ class SessionRequest(ResearchRequest):
     session_id: UUID
 
 
+class FinalCodingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    search_run_id: str
+    action: Literal['case_review']
+
+
 def researcher_identity(request: Request):
     if not os.environ.get("DATABRICKS_APP_NAME"):
         raise HTTPException(503, "Hosted invocation requires the Databricks Apps identity proxy.")
@@ -44,6 +50,12 @@ def session_output(session, key, actor, public_id):
             "prompt_version": state.get("triage", {}).get("prompt_version"),
             "pending_review": [item.value for task in snapshot.tasks for item in task.interrupts],
             "stop_reason": state.get("stop_reason"),
+            "profile": state.get("profile", {}), "gaps": state.get("gaps", []),
+            "sources": [{k: v for k, v in source.items() if k != "text"} for source in state.get("sources", {}).values()],
+            "coded_fields": state.get("coded_fields", {}),
+            "coding_review": state.get("coding_review", {}),
+            "collection_review_recommended": state.get("collection_review_recommended", False),
+            "collection_stop_reason": state.get("collection_stop_reason"),
             "interrupted_by_error": any(task.error for task in snapshot.tasks)}
 
 
@@ -97,7 +109,7 @@ def inspect_session(session_id: UUID, request: Request):
     actor = researcher_identity(request)
     key = scoped_session_id(str(session_id), actor)
     try:
-        with open_hosted_session(key) as session:
+        with open_hosted_session(key, read_only=True) as session:
             return session_output(session, key, actor, session_id)
     except ValueError as exc:
         raise HTTPException(404, "Session not found.") from exc
@@ -121,6 +133,22 @@ def resume_session(session_id: UUID, payload: ReviewDecision, request: Request):
         raise HTTPException(409, "Session is already running.") from exc
     except Exception as exc:
         raise HTTPException(502, "Session could not resume. Inspect its state before retrying.") from exc
+
+
+@app.post("/sessions/{session_id}/finalize")
+def finalize_session(session_id: UUID, payload: FinalCodingRequest, request: Request):
+    actor = researcher_identity(request)
+    key = scoped_session_id(str(session_id), actor)
+    try:
+        with open_hosted_session(key) as session:
+            session.finalize(key, actor, payload.model_dump())
+            return session_output(session, key, actor, session_id)
+    except ValueError as exc:
+        raise HTTPException(409, "Investigation completion is stale, invalid, or no longer pending. Field decisions belong in case Review.") from exc
+    except SessionBusyError as exc:
+        raise HTTPException(409, "Session is already running.") from exc
+    except Exception as exc:
+        raise HTTPException(502, "Investigation completion failed. Inspect its state before retrying.") from exc
 
 
 if __name__ == "__main__":

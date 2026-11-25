@@ -55,10 +55,12 @@ def main():
         return
     profile_options = {}
     if args.fill_profile:
-        from research_app.research_profile import DatabricksClaimExtractor, DatabricksFieldDecisions
+        from research_app.research_profile import DatabricksClaimExtractor, DatabricksChatFieldDecisions
         fields = ("person_identity", "age", "city", "location", "agency", "manner", "medical_cause", "incident_date", "case_number")
-        profile_options = {"extract_claims": DatabricksClaimExtractor(args.model_endpoint, fields),
-                           "decide_claims": DatabricksFieldDecisions(client), "record_profile": store.record_profile}
+        from functools import partial
+        from research_app.source_collection import collect_sources
+        profile_options = {"collect_sources": partial(collect_sources, volume_path=store.volume_path), "extract_claims": DatabricksClaimExtractor(args.model_endpoint, fields),
+                           "decide_claims": DatabricksChatFieldDecisions(args.model_endpoint, client), "record_profile": store.record_profile}
     graph = build_research_graph(
         **profile_options,
         record_search=lambda response: store.record(response, actor),

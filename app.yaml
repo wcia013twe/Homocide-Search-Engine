@@ -10,3 +10,24 @@ env:
     valueFrom: brave_secret
   - name: EXA_API_KEY
     valueFrom: exa_secret
+  - name: HR_SEARCH_AUDIT_VOLUME
+    value: '/Volumes/homicide_research/research/sources_documents'
+  - name: HR_SEARCH_AUDIT_WAREHOUSE_ID
+    valueFrom: search_audit_warehouse
+  - name: HR_RESEARCH_MODEL_ENDPOINT
+    valueFrom: research_model
+  - name: HR_LAKEBASE_ENDPOINT
+    value: 'projects/homicide-research/branches/production/endpoints/primary'
+  - name: PGHOST
+    value: 'ep-little-rice-d8rdi7t4.database.us-east-2.cloud.databricks.com'
+  - name: PGDATABASE
+    value: 'databricks_postgres'
+  - name: PGUSER
+    value: '13cefcdd-1ce5-41bd-9aed-0c09249c3d14'
+  - name: HR_RESEARCH_WORKER_JOB_ID
+    valueFrom: research_worker
+
+  - name: HR_ISSUE_REPORTER_JOB_ID
+    valueFrom: issue_reporter
+  - name: HR_APP_VERSION
+    value: 'unified-main-2026-11-25'

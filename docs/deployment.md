@@ -1,4 +1,8 @@
-# UI scaffold deployment
+# Deployment history
+
+The active application and localhost now use the recovered code on `main`. Use the current run and deployment instructions in [README.md](../README.md). The scaffold notes below describe the original 2026-10-26 release and do not describe current storage or features.
+
+## Original scaffold
 
 Deployed on 2026-10-26 to the existing Databricks App `homocide-ai-research`.
 

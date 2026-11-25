@@ -1,0 +1,75 @@
+--- a/research_app/issue_ui.py
++++ b/research_app/issue_ui.py
+@@ -9,14 +9,19 @@
+ 
+ 
+ def _error_key(error):
+-    return json.dumps({key: error.get(key) for key in ('operation', 'error_type', 'message', 'frames')}, sort_keys=True) if error else None
++    return json.dumps({key: error.get(key) for key in ('operation', 'error_type', 'message', 'frames', 'investigation_id')}, sort_keys=True) if error else None
+ 
+ 
+ @st.fragment(run_every="3s")
+ def _error_hint():
+     error = st.session_state.get("issue_last_error")
+-    if error and _error_key(error) != st.session_state.get("issue_reported_error"):
++    key = _error_key(error)
++    if error and key != st.session_state.get("issue_reported_error"):
+         st.caption(":material/error_outline: Error detected")
++        if key not in st.session_state.get("issue_prompted_errors", set()) and not st.session_state.get("issue_dialog_open"):
++            st.session_state.setdefault("issue_prompted_errors", set()).add(key)
++            st.session_state["issue_dialog_open"] = True
++            st.rerun(scope="app")
+ 
+ 
+ def render():
+--- a/research_app/issue_reporting.py
++++ b/research_app/issue_reporting.py
+@@ -36,6 +36,21 @@
+     import streamlit as st
+ 
+     st.session_state["issue_last_error"] = diagnostic(exc, operation)
++
++
++def observe_task_status(task):
++    """Prompt on a newly failed investigation, not historical failures on page load."""
++    import streamlit as st
++
++    known = st.session_state.setdefault("issue_task_statuses", {})
++    previous = known.get(task['id'])
++    known[task['id']] = task['status']
++    if task['status'] in ('failed', 'interrupted') and previous not in (None, 'failed', 'interrupted'):
++        st.session_state['issue_last_error'] = {
++            'operation': 'investigation.' + (task.get('stage') or 'worker'),
++            'error_type': 'InvestigationFailure', 'message': sanitize(task.get('error') or task['status']),
++            'investigation_id': task['id'], 'frames': [],
++        }
+ 
+ 
+ def make_report(page, description="", *, actor="", case_id=None, investigation_id=None, error=None, report_id=None):
+--- a/research_app/search.py
++++ b/research_app/search.py
+@@ -5,7 +5,7 @@
+ from uuid import uuid4
+ 
+ import streamlit as st
+-from research_app.issue_reporting import capture_error
++from research_app.issue_reporting import capture_error, observe_task_status
+ 
+ from research_app import investigation_tasks
+ from research_app.hosted_session import open_hosted_session, scoped_session_id
+@@ -36,6 +36,7 @@
+     if not tasks:
+         st.caption("Submit an investigation to see agent progress here.")
+     for task in tasks:
++        observe_task_status(task)
+         box = (st.expander('Failed investigation · ' + task['query'].replace('\n', ' '))
+                if task['status'] in ('failed', 'interrupted') else st.container(border=True, gap='small'))
+         with box:
+--- a/app.yaml
++++ b/app.yaml
+@@ -30,4 +30,4 @@
+   - name: HR_ISSUE_REPORTER_JOB_ID
+     valueFrom: issue_reporter
+   - name: HR_APP_VERSION
+-    value: 'issue-reporting-v2'
++    value: 'issue-reporting-v3'

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 from uuid import uuid4
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from research_app.research_agent import build_research_graph
 from research_app.research_profile import DatabricksFieldDecisions, fill_question, update_profile
@@ -60,7 +60,7 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(set(result["request"]["questions"]), {"age", "city"})
         self.assertEqual(set(fill_question(self.claim)["criteria"]), {"fill", "leave_empty"})
 
-    def test_real_graph_fills_and_proposes_only_remaining_gaps(self):
+    def test_real_graph_fills_and_proposes_collection_and_remaining_gaps(self):
         search = Mock(return_value=SearchResponse("exa", "seed", {}, {}, (
             SearchResult("Report", "https://example.invalid/news", self.sources["news"]["text"]),)))
         triage = Mock(return_value={"assessments": [{"result_rank": 1, "label": "candidate_evidence", "reason": "Incident lead", "duplicate_of_rank": None}], "next_queries": []})
@@ -71,7 +71,7 @@ class ProfileTests(unittest.TestCase):
                                      decide_claims=decisions, required_fields=("age", "city"))
         state = graph.invoke({"query": "seed"})
         self.assertEqual(state["profile"]["age"]["value"], "47")
-        self.assertEqual([p["target_gap"] for p in state["triage"]["next_queries"]], ["city"])
+        self.assertEqual([p["target_gap"] for p in state["triage"]["next_queries"]], ["case_collection", "city"])
         self.assertEqual(state["field_decisions"][0]["claims"][0]["value"], "47")
         search.assert_called_once()
 
@@ -91,3 +91,33 @@ class ProfileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ChatFieldDecisionTests(unittest.TestCase):
+    def test_uses_configured_endpoint_and_existing_validated_rubric(self):
+        from research_app.research_profile import DatabricksChatFieldDecisions
+        client = Mock()
+        client.api_client.do.return_value = {'choices': [{'finish_reason': 'stop',
+            'message': {'content': json.dumps({'answers': {'c': answer()}})}}]}
+        claim = dict(claim_id='c', field='age', value=47, source_id='s', passage='47')
+        sources = {'s': {'text': '47', 'url': 'https://example.invalid'}}
+        result = DatabricksChatFieldDecisions('configured-model', client)('seed', [claim], sources, {})
+        self.assertEqual(client.api_client.do.call_args.args[1], '/serving-endpoints/configured-model/invocations')
+        updated = update_profile({}, [claim], sources, result['answers'], ('age',))
+        self.assertEqual(updated['profile']['age']['value'], 47)
+
+
+class ClaimExtractionTests(unittest.TestCase):
+    def test_unsupported_quotation_is_rejected_without_losing_supported_claims(self):
+        from research_app.research_profile import DatabricksClaimExtractor
+        valid = dict(claim_id='a', subject_id='victim_1', field='age', value='47',
+                     source_id='s', passage='She was 47.')
+        invalid = {**valid, 'claim_id': 'b', 'passage': 'She was forty seven.'}
+        client = Mock()
+        client.api_client.do.return_value = {'choices': [{'finish_reason': 'stop',
+            'message': {'content': json.dumps({'claims': [invalid, valid]})}}]}
+        with patch('databricks.sdk.WorkspaceClient', return_value=client):
+            result = DatabricksClaimExtractor('configured-model', ['age'])(
+                'seed', {'s': {'text': 'She was 47.', 'url': 'https://example.invalid'}})
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['passage'], valid['passage'])
+        self.assertEqual(result[0]['locator']['end'], len(valid['passage']))

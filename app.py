@@ -1,17 +1,15 @@
 """Databricks Apps entrypoint for the UI-first research workspace."""
-import json
 import os
 import uuid
 from pathlib import Path
 
 import streamlit as st
 
-from research_app import guide, search, usage
-# from research_app import datasets, library, projects  # Re-add with new implementations when these workflows return.
+from research_app import cases, dataset, guide, search, usage
 from research_app.repository import ConflictError, Repository
 from research_app.theme import apply_theme
 
-st.set_page_config(page_title="Homicide Research", page_icon=":material/library_books:", layout="wide")
+st.set_page_config(page_title="Homicide Research", page_icon=":material/library_books:", layout="wide", initial_sidebar_state="auto")
 apply_theme()
 
 
@@ -32,6 +30,7 @@ def user_identity():
 identity = user_identity()
 repo = Repository(Path(os.environ.get("HR_DATA_DIR", "/tmp/homicide-research")) / "workspaces.sqlite3", identity)
 st.session_state["research_user"] = identity
+st.session_state["research_email"] = (st.context.headers.get("X-Forwarded-Email") or identity) if os.environ.get("HR_REQUIRE_PROXY_IDENTITY", "false").lower() == "true" else identity
 if st.session_state.get("workspace_owner") != identity:
     st.session_state.workspace, st.session_state.revision = repo.load()
     st.session_state.workspace_owner = identity
@@ -59,38 +58,30 @@ with st.sidebar:
     st.caption("Research workspace")
     page = st.radio("Workspace navigation", [
         "Search",
-        # "Datasets", "Library", "Projects",
+        "Cases",
+        "Dataset",
         "Usage",
         "User Guide",
     ], label_visibility="collapsed", key="nav_page")
+    from research_app.issue_ui import render as render_issue_form
+    render_issue_form()
     st.divider()
-    st.caption("Brave and Exa search are available when configured. explore-search saves identifying leads when a model endpoint is configured.")
-    with st.expander("Workspace snapshots"):
-        st.caption("Changes survive page reloads in Databricks. Download a snapshot before redeploying; hosted durable storage is not connected yet.")
-        st.download_button("Download workspace", json.dumps(st.session_state.workspace, indent=2, ensure_ascii=False), "research-workspace.json", "application/json", use_container_width=True)
-        incoming = st.file_uploader("Restore workspace snapshot", type=["json"], key="snapshot_upload")
-        if incoming and st.button("Restore snapshot", use_container_width=True):
-            try:
-                if incoming.size > 10 * 1024 * 1024:
-                    raise ValueError("Snapshot must be smaller than 10 MB.")
-                payload = json.loads(incoming.getvalue())
-                revision = repo.save(payload, st.session_state.revision)
-                st.session_state.workspace = payload
-                st.session_state.revision = revision
-                st.rerun()
-            except (ValueError, TypeError, ConflictError) as exc:
-                st.error(f"Snapshot could not be restored: {exc}")
+    st.caption("Search → Cases → Dataset")
 
 if st.session_state.get("workspace_notice"):
     st.success(st.session_state.pop("workspace_notice"))
 if st.session_state.get("workspace_error"):
     st.error(st.session_state.pop("workspace_error"))
 
-{
-    "Search": search,
-    # "Datasets": datasets,
-    # "Library": library,
-    # "Projects": projects,
-    "Usage": usage,
-    "User Guide": guide,
-}[page].render(st.session_state.workspace, save)
+try:
+    {
+        "Search": search,
+        "Cases": cases,
+        "Dataset": dataset,
+        "Usage": usage,
+        "User Guide": guide,
+    }[page].render(st.session_state.workspace, save)
+except Exception as exc:
+    from research_app.issue_reporting import capture_error
+    capture_error(exc, page + ".render")
+    st.error("This page could not finish. Use Submit issue in the sidebar to report it; your saved research is preserved.")

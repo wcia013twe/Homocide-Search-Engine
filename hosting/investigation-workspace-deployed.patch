@@ -1,0 +1,749 @@
+--- a/research_app/search.py
++++ b/research_app/search.py
+@@ -1,142 +1,22 @@
+-"""Submit investigations and display shared backend checkpoints."""
++"""Submit investigations and open their case workspace."""
+ import os
+ from research_app.investigation_tasks import database_configured
+-import time
+ from uuid import uuid4
+ 
+ import streamlit as st
+-from research_app.issue_reporting import capture_error, observe_task_status
++from research_app.issue_reporting import capture_error
+ 
+ from research_app import investigation_tasks
+-from research_app.hosted_session import open_hosted_session, scoped_session_id
+-from research_app.investigation_progress import render_activity
+-
+-
+-def _read_progress(session_id, actor):
+-    with open_hosted_session(session_id, read_only=True) as session:
+-        snapshot = session.inspect(session_id, actor)
+-    return snapshot.values, any(item.interrupts for item in snapshot.tasks), any(item.error for item in snapshot.tasks)
+-
+-
+-@st.cache_data(ttl=30, max_entries=64, scope='session', show_spinner=False)
+-def _settled_progress(session_id, actor, revision):
+-    # Worker completion and new review commands advance the durable revision.
+-    return _read_progress(session_id, actor)
+-
+-
+-@st.fragment(run_every="2s")
+-def progress():
+-    try:
+-        tasks = investigation_tasks.list_tasks(st.session_state["research_user"])
+-    except Exception as issue_exc:
+-        capture_error(issue_exc, "search.progress")
+-        st.error("Submitted investigations are temporarily unavailable.")
+-        return
+-    st.subheader("Investigations")
+-    if not tasks:
+-        st.caption("Submit an investigation to see agent progress here.")
+-    for task in tasks:
+-        observe_task_status(task)
+-        box = (st.expander('Failed investigation · ' + task['query'].replace('\n', ' '))
+-               if task['status'] in ('failed', 'interrupted') else st.container(border=True, gap='small'))
+-        with box:
+-            heading, action = st.columns([4, 1], vertical_alignment="center")
+-            heading.markdown("### " + task["query"].replace("\n", " "))
+-            if action.button("View investigation →", key="view_" + task["id"]):
+-                st.session_state["selected_investigation"] = task
+-                st.rerun()
+-            render_activity(task, compact=True)
+-            if task['status'] == 'queued':
+-                continue
+-            if task["status"] in ("failed", "interrupted"):
+-                st.error("Investigation failed. Check backend logs.")
+-                continue
+-            try:
+-                key = scoped_session_id(task["id"], task["actor"])
+-                if task['status'] in ('awaiting_review', 'finished'):
+-                    state, pending, failed = _settled_progress(key, task['actor'], task['revision'])
+-                else:
+-                    state, pending, failed = _read_progress(key, task['actor'])
+-                status = state.get("status", "running")
+-                if failed:
+-                    status = "failed"
+-                if pending and task["status"] != "awaiting_review":
+-                    st.write("Awaiting review")
+-                st.caption(f'Searches completed: {state.get("search_count", 0)} · Sources found: {len(state.get("results", []))}')
+-                with st.expander("Progress details"):
+-                    st.caption(f'Investigation {task["id"]}')
+-                    steps = (
+-                        ("Initial case discovery", bool(state.get("search_count"))),
+-                        ("Collect and deduplicate sources", bool(state.get("sources"))),
+-                        ("Investigate missing fields", bool(state.get("profile"))),
+-                        ("Validate coding and prepare review", bool(state.get("coding_review"))),
+-                    )
+-                    st.markdown("  \n".join(f"{'✓' if completed else '○'}  {label}" for label, completed in steps))
+-                    if state.get("stop_reason"):
+-                        st.caption(state["stop_reason"])
+-                    if state.get("search_history"):
+-                        with st.expander("Search history"):
+-                            for item in state["search_history"]:
+-                                st.write(f'✓ {item["query"]}')
+-            except ValueError:
+-                st.caption("Starting investigation…")
+-            except Exception as issue_exc:
+-                capture_error(issue_exc, "search.progress")
+-                st.error("Progress is temporarily unavailable; retrying automatically.")
+-
+-
+-DEMO_STEPS = (
+-    "Initial case discovery",
+-    "Collect and deduplicate sources",
+-    "Investigate missing fields",
+-    "Validate coding and prepare review",
+-)
+-
+-
+-@st.fragment(run_every="1s")
+-def demo_progress():
+-    demo = st.session_state.get("investigation_demo")
+-    st.subheader("Investigations")
+-    if not demo:
+-        st.caption("Start a UI demo to preview agent progress.")
+-        return
+-    step = min(int((time.monotonic() - demo["started"]) / 4), len(DEMO_STEPS))
+-    with st.container(border=True):
+-        title, badge = st.columns([4, 1])
+-        title.subheader(demo["query"])
+-        badge.markdown("**Needs review**" if step == len(DEMO_STEPS) else "**Investigating**")
+-        st.caption("UI DEMO · Simulated progress · No searches or model calls")
+-        if st.button("View investigation →", key="view_demo"):
+-            st.session_state["selected_investigation"] = "demo"
+-            st.rerun()
+-        st.progress(step / len(DEMO_STEPS))
+-        for index, label in enumerate(DEMO_STEPS):
+-            icon = "✓" if index < step else "◉" if index == step else "○"
+-            st.write(f"{icon}  {label}")
+-        st.divider()
+-        st.caption("Demo ready for review. No real records were created." if step == len(DEMO_STEPS)
+-                   else DEMO_STEPS[step] + "…")
++from research_app.hosted_session import scoped_session_id
+ 
+ 
+ def render(workspace: dict, save):
+-    selected = st.session_state.get("selected_investigation")
+-    if selected:
+-        if st.button("← Back to investigations", key="investigation_back"):
+-            del st.session_state["selected_investigation"]
+-            st.rerun()
+-        from research_app import investigation_detail
+-        with st.container(key="investigation_detail"):
+-            if selected == "demo":
+-                investigation_detail.render_demo(st.session_state["investigation_demo"])
+-            else:
+-                investigation_detail.render_live(selected)
+-        return
+     if st.session_state.get('investigation_case_id'):
+         from research_app.cases import open_case
+         st.caption('For case: ' + st.session_state['investigation_case_title'])
+         st.button('← Back to case', on_click=open_case, args=(st.session_state['investigation_case_id'],))
+     st.title("Search")
+-    st.caption("Start an investigation, follow its progress, and review the evidence.")
++    st.caption("Start an investigation. Follow progress and review evidence inside its case.")
+     configured = database_configured() and all(os.environ.get(name) for name in (
+         "HR_SEARCH_AUDIT_VOLUME", "HR_SEARCH_AUDIT_WAREHOUSE_ID", "HR_RESEARCH_MODEL_ENDPOINT"))
+     if not configured:
+@@ -156,16 +36,12 @@
+         if not st.session_state.get('investigation_case_id') and cases_available:
+             labels = {'__new_case__': 'Create a new case', **{case['id']: case['title'] + ' · ' + case['gold_key'] for case in cases}}
+             st.selectbox('Case', list(labels), index=None, placeholder='Choose a case', format_func=labels.get,
+-                         key='search_target_case', help='Choose a case before submitting so its investigations appear together in Review.')
++                         key='search_target_case', help='Choose the case that will contain this investigation and its evidence.')
+         st.text_area("Investigation query", placeholder="Person's name, location, and any known incident details",
+                              height=100, key="search_live_query",
+                              help="Include a state or incident year when known. Results need source review.")
+         st.form_submit_button("Submit investigation", type="primary", disabled=not configured or not cases_available,
+                                          key="search_live_submit", on_click=_submit_investigation)
+-    if st.session_state.get("investigation_demo"):
+-        demo_progress()
+-    if configured:
+-        progress()
+ 
+ 
+ def _submit_investigation():
+@@ -198,4 +74,6 @@
+         st.session_state.pop('investigation_case_id', None)
+         st.session_state.pop('investigation_case_title', None)
+         st.session_state.pop('search_target_case', None)
++        st.session_state['case_investigation_' + case_id] = public_id
++        st.session_state['workspace_notice'] = 'Investigation started. You can leave this page; research continues in the background.'
+         open_case(case_id)
+--- a/research_app/cases.py
++++ b/research_app/cases.py
+@@ -118,31 +118,34 @@
+ 
+ 
+ def _investigations(case, active):
+-    @st.fragment(run_every='2s' if active else None)
++    tasks = list_case_tasks(case['id'])
++    key = 'case_investigation_' + case['id']
++    selected = next((task for task in tasks if task['id'] == st.session_state.get(key)), None)
++    selected = selected or (tasks[0] if tasks else None)
++    polling = bool(active and selected and selected['status'] in ('queued', 'running'))
++
++    @st.fragment(run_every='2s' if polling else None)
+     def content():
+         tasks = list_case_tasks(case['id'])
+-        st.subheader(f'{len(tasks)} team investigations')
++        st.caption(f"{len(tasks)} team investigation{'s' if len(tasks) != 1 else ''}")
+         if not tasks:
+             st.info('No investigations yet. Start an investigation for this case.')
+             return
+-        selected = st.session_state.get('case_investigation_' + case['id'])
+-        for task in tasks:
+-            with st.container(border=True):
+-                heading, action = st.columns([4, 1], vertical_alignment='center')
+-                heading.subheader(task['query'])
+-                st.caption(' · '.join(filter(None, [submitted_text(task), 'By ' + task['submitted_by_email'], task['status'].replace('_', ' ').capitalize()])))
+-                if task.get('stage') and task['status'] in ('running', 'queued'):
+-                    st.caption(task['stage'].replace('_', ' '))
+-                if task['status'] == 'saved':
+-                    st.caption('Saved findings are included in Review and Sources.')
+-                elif action.button('View investigation →', key='case_run_' + task['id']):
+-                    st.session_state['case_investigation_' + case['id']] = task['id']
+-                    st.rerun(scope='fragment')
+-        if selected and active:
+-            task = next((task for task in tasks if task['id'] == selected), None)
+-            if task and task['status'] != 'saved':
+-                from research_app.investigation_detail import render_live
+-                render_live(task, case_id=case['id'])
++        key = 'case_investigation_' + case['id']
++        by_id = {task['id']: task for task in tasks}
++        if st.session_state.get(key) not in by_id:
++            st.session_state[key] = tasks[0]['id']
++        selected = st.selectbox('Investigation', list(by_id), key=key,
++            format_func=lambda task_id: by_id[task_id]['query'] + ' · ' + submitted_text(by_id[task_id])
++                + ' · ' + by_id[task_id]['status'].replace('_', ' ').capitalize())
++        if st.button('Refresh investigation', key='refresh_investigation_' + case['id']):
++            st.rerun()
++        needs_polling = bool(active and by_id[selected]['status'] in ('queued', 'running'))
++        if polling != needs_polling:
++            st.rerun()
++        if active:
++            from research_app.investigation_detail import render_live
++            render_live(by_id[selected], case_id=case['id'])
+     content()
+ 
+ 
+@@ -205,7 +208,7 @@
+             st.caption(f'{len(captures)} saved captures')
+             with st.expander('Evidence captures'):
+                 for source_id, capture in captures.items():
+-                    st.caption('Investigation ' + source_id.split(':', 1)[0] + ' · ' + capture.get('evidence_kind', 'Saved evidence'))
++                    st.caption('Investigation ' + source_id.split(':', 1)[0] + ' · ' + capture.get('evidence_kind', 'Saved evidence').replace('_', ' ').capitalize())
+                     if capture.get('snippet'):
+                         st.text(capture['snippet'])
+ 
+--- a/research_app/investigation_detail.py
++++ b/research_app/investigation_detail.py
+@@ -1,117 +1,99 @@
+-"""Investigation detail presentation; demo content is explicitly fictional."""
+-import time
++"""The investigation workspace inside a case."""
++import streamlit as st
+ 
+-import streamlit as st
+ from research_app.issue_reporting import capture_error
+-
+-
+-from research_app.gold_fields import GOLD_FIELDS
+ from research_app.evidence_groups import state_evidence
+ from research_app.evidence_view import render_fields
+ from research_app.investigation_progress import render_activity
+ 
+ 
+-
+-@st.fragment(run_every="1s")
+-def render_demo(demo):
+-    step = min(int((time.monotonic() - demo["started"]) / 4), 4)
+-    stages = ("Initial case discovery", "Collect and deduplicate sources",
+-              "Investigate missing fields", "Validate coding and prepare review")
+-    title, status = st.columns([4, 1])
+-    title.title(demo['query'])
+-    status.markdown('**Needs review**' if step == 4 else '**Investigating**')
+-    st.caption('UI DEMO · Fictional example · No real incident facts or sources')
+-    st.caption('Florida · 2025 · Example investigation')
+-    st.progress(step / 4)
+-    st.caption('Ready for review' if step == 4 else stages[step] + '…')
+-    st.subheader('Investigation summary')
+-    if step < 4:
+-        st.write('The simulated agent is working through discovery, evidence collection, and coding. This view updates automatically as the run progresses.')
+-    else:
+-        st.write('The simulated run has completed discovery and source collection. Supported fields are ready for review; the incident date has conflicting accounts and some demographic information remains unavailable.')
+-    st.subheader('Evidence and coding')
+-    if step < 2:
+-        st.caption('Collecting source material. Fields update as the demo progresses.')
+-    demo_fields = {} if step < 2 else {
+-        'Victim Age': {'value': '47', 'status': 'Simulated · Demo source A'},
+-        'Offender Age': {'value': '49', 'status': 'Simulated · Demo source B'},
+-        'Date Of Incident': {'value': None, 'status': 'Source conflict',
+-                             'reason': 'Simulated source accounts give different dates.'},
+-        'case_id': {'value': 'UI-DEMO', 'status': 'Fictional example'},
+-    }
+-    demo_sources = {
+-        'demo-a': {'title': 'Demo source A', 'document_id': 'demo-document-a', 'evidence_kind': 'Fictional example'},
+-        'demo-b': {'title': 'Demo source B', 'document_id': 'demo-document-b', 'evidence_kind': 'Fictional example'},
+-    }
+-    if step >= 2:
+-        demo_fields['Victim Age']['claims'] = [
+-            {'claim_id': 'demo-age', 'source_id': 'demo-a', 'subject_id': 'victim_1',
+-             'value': '47', 'passage': 'The fictional victim was reported as 47.'}]
+-        demo_fields['Date Of Incident']['claims'] = [
+-            {'claim_id': 'demo-date-a', 'source_id': 'demo-a', 'value': '2025-11-01',
+-             'passage': 'This fictional report gives November 1 as the incident date.'},
+-            {'claim_id': 'demo-date-b', 'source_id': 'demo-b', 'value': '2025-11-02',
+-             'passage': 'This fictional report gives November 2 as the incident date.'}]
+-    render_fields(demo_fields, demo_sources, key='demo', compact=True)
+-    st.subheader('Sources')
+-    st.caption('Demo source A and B are illustrative placeholders, not published documents.')
+-
+-
+-@st.fragment(run_every="2s")
+ def render_live(task, case_id=None):
++    """The case fragment owns polling, so forms have one stable render scope."""
+     st.session_state['issue_active_investigation'] = task['id']
+     from research_app.hosted_session import open_hosted_session, scoped_session_id
+-    st.title(task['query'])
+-    st.caption('Investigation ' + task['id'])
++    from research_app.issue_reporting import observe_task_status
+     try:
+         from research_app.investigation_tasks import get_task, get_case_task
+-        task = get_case_task(task['id'], case_id) if case_id else get_task(task['id'], st.session_state['research_user'])
++        if task['status'] != 'saved':
++            task = get_case_task(task['id'], case_id) if case_id else get_task(task['id'], st.session_state['research_user'])
++        observe_task_status(task)
++        st.subheader(task['query'])
+         render_activity(task, compact=True)
+         if task['status'] in ('failed', 'interrupted'):
+-            st.session_state['issue_last_error'] = {'operation': 'Investigation ' + task['status'],
+-                'error_type': 'InvestigationFailure', 'message': task.get('error', ''), 'frames': []}
+-            st.error(task.get('error') or 'Investigation ' + task['status'] + '. Check backend logs.')
+-        if task['status'] == 'queued':
++            st.error(task.get('error') or 'Research stopped unexpectedly. Saved evidence is preserved. Use Submit issue to report this investigation.')
++        elif task['status'] == 'queued':
++            return
++        elif task['status'] == 'saved':
++            st.info('Saved findings are available in the case Review and Sources tabs.')
+             return
+         key = scoped_session_id(task['id'], task['actor'])
+         with open_hosted_session(key, read_only=True) as session:
+             snapshot = session.inspect(key, task['actor'])
+     except ValueError:
+-        st.caption('Preparing the first saved checkpoint. This view updates automatically every 2 seconds.')
++        st.caption('Preparing the first saved checkpoint. Progress updates automatically.')
+         return
+-    except Exception as issue_exc:
+-        capture_error(issue_exc, "investigation_detail.render_live")
+-        st.error('Investigation details are temporarily unavailable.')
++    except Exception as exc:
++        capture_error(exc, 'investigation_detail.render_live')
++        st.error('Investigation details are temporarily unavailable. Saved research is preserved. Reload this view to try again.')
+         return
+     from research_app.evidence_registry import annotate_state
+     try:
+         state = annotate_state(task['id'], snapshot.values)
+-    except Exception as issue_exc:
+-        capture_error(issue_exc, "investigation_detail.render_live")
+-        st.error('Saved evidence references are temporarily unavailable. Reload shortly.')
++    except Exception as exc:
++        capture_error(exc, 'investigation_detail.render_live')
++        st.error('Saved evidence references are temporarily unavailable. Reload this view to try again.')
+         return
+-    if any(item.interrupts for item in snapshot.tasks) and task['status'] != 'awaiting_review':
+-        st.write('Needs review')
+-    st.caption(state.get('stop_reason') or 'The agent is gathering evidence. Review saved sources and coding below.')
+-    if case_id:
++    pending = [item.value for item in snapshot.tasks for item in item.interrupts]
++    if task['status'] == 'awaiting_review' and pending:
++        st.info('Your input is needed to complete coding.' if pending[0].get('stage') == 'final_coding'
++                else 'Your input is needed to choose the next research step.')
+         if task['actor'] == st.session_state['research_user']:
+             from research_app.review_controls import render_review_controls
+-            render_review_controls(task, snapshot, include_coding=False)
+-        st.caption('Review aggregated findings and resolve coding in the case Review tab. Saved documents are in Sources.')
+-        return
+-    st.subheader('Evidence and coding')
++            render_review_controls(task, snapshot)
++        else:
++            st.caption('The investigation owner can submit this decision. You can inspect the saved findings below.')
++    elif task['status'] == 'finished':
++        st.success('Research pass finished. Review the combined findings in the case Review tab before approving the case.')
++    if state.get('stop_reason') and task['status'] not in ('running', 'queued'):
++        st.write(state['stop_reason'])
++    st.subheader('Findings so far')
++    st.caption('Provisional findings from this investigation. Case approval happens in the Review tab.')
+     fields, sources = state_evidence(state)
+     render_fields(fields, sources, mode='live', key='investigation_' + task['id'], compact=True)
+-    from research_app.review_controls import render_review_controls
+-    if task['actor'] == st.session_state['research_user']:
+-        render_review_controls(task, snapshot)
+-    elif any(item.interrupts for item in snapshot.tasks):
+-        st.caption('The investigation owner can continue collection. Case approval is available in Review.')
+-    results = state.get('results', [])
+-    with st.expander(f'Sources ({len(results)})'):
+-        for result in results:
+-            st.write(result.get('title', 'Untitled source'))
+-            st.write(result.get('url', ''))
+-            st.caption(result.get('excerpt', ''))
+-        if not results:
+-            st.caption('No sources have been saved yet.')
++    if state.get('gaps'):
++        with st.expander('Missing or conflicting information', expanded=True):
++            for gap in state['gaps']:
++                st.write(gap['field'].replace('_', ' ') + ': ' + gap['reason'])
++    st.subheader('Research activity')
++    history = state.get('search_history', [])
++    if not history:
++        st.caption('No completed searches have been saved yet.')
++    # Search records have no timestamps; attach decisions by run ID rather than inventing times.
++    for index, search in enumerate(history, 1):
++        with st.expander(f"Search {index}: {search['query']}", expanded=index == len(history)):
++            st.caption('Search completed · ' + search.get('provider', state.get('provider', '')))
++            if search.get('search_run_id'):
++                captured = [source for source in sources.values()
++                            if source.get('search_run_id') == search['search_run_id']]
++                st.caption(f'{len(captured)} saved source captures linked to this search')
++                for source in captured:
++                    st.write(source.get('title') or source.get('url') or 'Saved source')
++            for event in state.get('review_history', []):
++                if search.get('search_run_id') and event.get('search_run_id') == search['search_run_id']:
++                    proposal = event.get('selected_proposal', {})
++                    st.write('Continue: ' + proposal['query'] if proposal else 'Stop collection')
++                    st.write(event.get('reason', ''))
++            if search.get('search_run_id'):
++                with st.expander('Technical details'):
++                    st.code(search['search_run_id'])
++    with st.expander(f'Saved sources ({len(sources)})'):
++        for source_id, source in sources.items():
++            st.write(source.get('title') or source.get('url') or 'Saved source')
++            if source.get('url', '').startswith(('https://', 'http://')):
++                st.link_button('Open source', source['url'], key='source_' + task['id'] + source_id)
++            st.caption(source.get('evidence_kind', 'Saved evidence').replace('_', ' ').capitalize())
++            st.text(source.get('text') or source.get('snippet') or 'No saved text is available.')
++    with st.expander('Investigation details'):
++        st.text('Investigation ' + task['id'])
++        from research_app.investigation_progress import timing_text
++        st.caption(timing_text(task))
+--- a/research_app/investigation_progress.py
++++ b/research_app/investigation_progress.py
+@@ -58,6 +58,9 @@
+         text = submitted_text(task)
+         if text:
+             st.caption(text)
++        if task.get('heartbeat_at'):
++            updated = task['heartbeat_at'].astimezone(ZoneInfo('America/New_York'))
++            st.caption('Last worker update: ' + updated.strftime('%b %d at %I:%M:%S %p %Z'))
+         if status == 'queued':
+             st.caption('Starting a worker can take tens of seconds; busy workers add queue time. This view updates every 2 seconds.')
+         elif status == 'running':
+--- a/research_app/review_controls.py
++++ b/research_app/review_controls.py
+@@ -14,14 +14,25 @@
+         st.caption('Review command is queued or running. This view updates automatically.')
+         return
+     review = pending[0]
+-    st.subheader('Review next step')
++    st.subheader('Your next action')
+     if review.get('stage') != 'final_coding':
++        decision_key = task['id'] + '_' + str(review.get('search_run_id'))
+         proposals = review.get('next_queries', [])
+-        with st.form('search_review_' + task['id']):
+-            action = st.selectbox('Action', ['Continue with proposed search', 'Stop collection']) if proposals else 'Stop collection'
+-            index = st.selectbox('Proposed search', range(len(proposals)), format_func=lambda i: proposals[i]['query']) if proposals else None
+-            reason = st.text_area('Decision reason')
+-            if st.form_submit_button('Save search decision'):
++        index = st.selectbox('Proposed search', range(len(proposals)), format_func=lambda i: proposals[i]['query'],
++                             key='proposal_' + decision_key) if proposals else None
++        if index is not None:
++            proposal = proposals[index]
++            st.write('Research gap: ' + proposal.get('target_gap', 'Follow-up research'))
++            st.write(proposal.get('reason', ''))
++            for result in snapshot.values.get('results', []):
++                if result.get('result_rank') in proposal.get('based_on_ranks', []):
++                    st.caption(result.get('title') or result.get('url') or 'Supporting source')
++                    st.write(result.get('snippet', ''))
++        with st.container():
++            action = st.selectbox('Action', ['Continue with proposed search', 'Stop collection'],
++                                  key='search_action_' + decision_key) if proposals else 'Stop collection'
++            reason = st.text_area('Decision reason', key='search_reason_' + decision_key)
++            if st.button('Save search decision', key='search_decision_' + decision_key):
+                 if not reason.strip():
+                     st.warning('Enter a decision reason.')
+                 else:
+@@ -29,7 +40,8 @@
+                     if payload['action'] == 'search':
+                         payload['query_index'] = index
+                     enqueue(task['id'], actor, 'resume', payload, expected_revision=current['revision'])
+-                    st.success('Search decision queued.')
++                    st.session_state['workspace_notice'] = 'Search decision queued.'
++                    st.rerun()
+         return
+     if not include_coding:
+         return
+@@ -88,6 +100,7 @@
+                 profile = snapshot.values.get('profile', {})
+                 apply_coding_review({name: profile.get(name, {}) for name in fields}, sources, payload, tuple(fields))
+                 enqueue(task['id'], actor, 'finalize', payload, expected_revision=current['revision'])
+-                st.success('Coding review queued.')
++                st.session_state['workspace_notice'] = 'Coding review queued.'
++                st.rerun()
+             except ValueError as exc:
+                 st.warning(str(exc))
+--- a/research_app/guide.py
++++ b/research_app/guide.py
+@@ -12,10 +12,10 @@
+     with start:
+         st.subheader('Start an investigation')
+         st.markdown('''
+-1. Open **Search**. Enter a name, location, and any known incident details, then select **Submit investigation**.
+-2. Follow the investigation below the form. A queued investigation is saved and waiting for a backend worker. Starting a worker can take tens of seconds.
+-3. Select **View investigation** to inspect coded fields, source passages, and progress. Active views update every two seconds.
+-4. When a review is requested, select the next search or stop collection and explain your decision. Review the final field decisions before completing collection.
++1. Open **Search**. Choose an existing case or create a new one. Enter a name, location, and known incident details, then select **Submit investigation**.
++2. The case opens with your new investigation selected. A queued investigation is saved and waiting for a backend worker. You can leave the page while research continues.
++3. Follow status, provisional findings, research activity, and saved sources in this investigation view. Queued and running investigations refresh every two seconds; refresh pauses while you enter a decision.
++4. When input is needed, use **Your next action** to select a proposed search or stop collection and explain your decision. Complete any final coding decisions here, then use the case **Review** tab for case approval.
+ ''')
+         st.caption('Search results and extracted claims need review. Open the original sources and compare supporting passages before accepting a finding.')
+     with review:
+--- a/tests/test_research_ui.py
++++ b/tests/test_research_ui.py
+@@ -80,92 +80,9 @@
+             self.app.text_area(key="search_live_query").set_value("Florida").run()
+             self.assertTrue(self.app.button(key="search_live_submit").disabled)
+ 
+-    def test_recovered_review_pause_and_failure(self):
+-        actor = self.app.session_state["research_user"]
+-        self.listing.return_value = [dict(id="recovered", actor=actor, query="Florida", status="finished", revision=1),
+-                                     dict(id="failed", actor=actor, query="Texas", status="failed")]
+-        snapshot = SimpleNamespace(values={"status": "awaiting_review", "search_count": 1},
+-                                   tasks=[SimpleNamespace(interrupts=["review"], error=None)])
+-        with patch("research_app.search.open_hosted_session") as session:
+-            session.return_value.__enter__.return_value.inspect.return_value = snapshot
++    def test_search_does_not_read_or_render_investigation_progress(self):
++        with patch('research_app.search.investigation_tasks.list_tasks') as listing:
+             self.app.run()
+-            from research_app.hosted_session import scoped_session_id
+-            session.return_value.__enter__.return_value.inspect.assert_called_once_with(scoped_session_id("recovered", actor), actor)
++        listing.assert_not_called()
+         self.assertFalse(self.app.exception)
+-        self.assertIn("Awaiting review", [item.value for item in self.app.markdown])
+-        self.assertIn("Investigation failed", self.app.error[0].value)
+-
+-    def test_settled_progress_is_reused_until_revision_changes_and_running_stays_live(self):
+-        actor = self.app.session_state['research_user']
+-        task = dict(id='cache-test', actor=actor, query='Florida', status='awaiting_review', revision=1)
+-        self.listing.return_value = [task]
+-        snapshot = SimpleNamespace(values={'search_count': 1}, tasks=[])
+-        with patch('research_app.search.open_hosted_session') as session:
+-            session.return_value.__enter__.return_value.inspect.return_value = snapshot
+-            self.app.run()
+-            self.app.run()
+-            self.assertEqual(session.call_count, 1)
+-            task['revision'] = 2
+-            self.app.run()
+-            self.assertEqual(session.call_count, 2)
+-            task['status'] = 'running'
+-            snapshot.values['search_count'] = 2
+-            self.app.run()
+-            self.app.run()
+-            self.assertEqual(session.call_count, 4)
+-            self.assertFalse(self.app.exception)
+-            self.assertTrue(any('Searches completed: 2' in item.value for item in self.app.caption))
+-
+-    def test_ui_demo_progresses_without_backend_execution(self):
+-        with patch("research_app.search.investigation_tasks.submit") as submit, patch("research_app.search.time.monotonic", return_value=100):
+-            self.app.session_state["investigation_demo"] = {"query": "Florida", "started": 100}
+-            self.app.run()
+-            self.assertFalse(self.app.exception)
+-            self.assertIn("Investigating", " ".join(item.value for item in self.app.markdown))
+-            with patch("research_app.search.time.monotonic", return_value=120):
+-                self.app.run()
+-            self.assertFalse(self.app.exception)
+-            self.assertIn("Needs review", " ".join(item.value for item in self.app.markdown))
+-            submit.assert_not_called()
+-
+-    def test_demo_opens_detail_and_returns_to_list(self):
+-        self.app.session_state["investigation_demo"] = {"query": "Florida", "started": 0}
+-        self.app.run()
+-        self.app.button(key="view_demo").click().run()
+-        self.assertFalse(self.app.exception)
+-        self.assertIn('Evidence and coding', [item.value for item in self.app.subheader])
+-        self.assertTrue(any('Fictional example' in item.value for item in self.app.caption))
+-        self.app.button(key="investigation_back").click().run()
+-        self.assertFalse(self.app.exception)
+-        self.assertIsNotNone(self.app.button(key="view_demo"))
+-
+-    def test_detail_includes_every_gold_column_even_before_results(self):
+-        from research_app.investigation_detail import GOLD_FIELDS
+-        self.app.session_state["investigation_demo"] = {"query": "Florida", "started": 0}
+-        self.app.run()
+-        self.app.button(key="view_demo").click().run()
+-        self.assertFalse(self.app.exception)
+-        displayed = [item.value for item in self.app.markdown]
+-        self.assertEqual(len(GOLD_FIELDS), 20)
+-        for field in GOLD_FIELDS:
+-            self.assertIn(field.replace('_', ' · '), displayed)
+-        self.assertIn('Not coded', displayed)
+-
+-    def test_queued_detail_shows_submission_time_and_live_activity(self):
+-        from datetime import datetime, timezone, timedelta
+-        actor = self.app.session_state['research_user']
+-        task = dict(id='queued', actor=actor, query='Name, Florida', status='queued',
+-                    created_at=datetime.now(timezone.utc) - timedelta(seconds=45),
+-                    worker_seconds=0, queue_seconds=45)
+-        self.listing.return_value = [task]
+-        self.app.run()
+-        with patch('research_app.investigation_tasks.get_task', return_value=task), patch('research_app.hosted_session.open_hosted_session') as opened:
+-            self.app.button(key='view_queued').click().run()
+-            opened.assert_not_called()
+-        self.assertFalse(self.app.exception)
+-        captions = ' '.join(item.value for item in self.app.caption)
+-        self.assertIn('Submitted', captions)
+-        self.assertNotIn('Total elapsed', captions)
+-        self.assertNotIn('Queue 0m 45s', captions)
+-        self.assertIn('updates every 2 seconds', captions)
+-        self.assertFalse(self.app.info)
++        self.assertNotIn('Investigations', [item.value for item in self.app.subheader])
+--- a/tests/test_collaboration_ui.py
++++ b/tests/test_collaboration_ui.py
+@@ -45,7 +45,7 @@
+         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+             'HR_DATA_DIR': directory, 'HR_REQUIRE_PROXY_IDENTITY': 'false',
+             'HR_RESEARCH_CHECKPOINT_DSN': '', 'HR_SEARCH_AUDIT_WAREHOUSE_ID': ''}):
+-            app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py')).run()
++            app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app.py'), default_timeout=30).run()
+             app.radio(key='nav_page').set_value('Cases').run()
+             self.assertFalse(app.exception)
+             self.assertEqual(app.title[0].value, 'Cases')
+@@ -86,8 +86,9 @@
+             'investigations': [{'investigation_id': 'later', 'snapshot': {'profile': {'Victim Age': {'value': '99'}}}}]}}
+         app = AppTest.from_string('''
+ import streamlit as st
+-from research_app.dataset import _published_sources
+-_published_sources(st.session_state['receipt'])
++from research_app.evidence_view import render_fields
++snapshot = st.session_state['receipt']['snapshot']
++render_fields(snapshot['evidence_fields'], snapshot['sources'], mode='published', key='approved')
+ ''')
+         app.session_state['receipt'] = receipt
+         app.run()
+--- /dev/null
++++ b/tests/test_investigation_workspace.py
+@@ -0,0 +1,112 @@
++"""The submission handoff and a single case-owned investigation view."""
++from contextlib import contextmanager
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++from streamlit.testing.v1 import AppTest
++
++
++class InvestigationWorkspaceTests(unittest.TestCase):
++    def test_submission_opens_exact_investigation(self):
++        app = AppTest.from_string('''
++import streamlit as st
++from research_app.search import _submit_investigation
++st.session_state.update(research_user='alice', search_live_query='Example incident',
++    search_target_case='case', search_case_options=['case'])
++_submit_investigation()
++''')
++        with patch('research_app.investigation_tasks.submit', return_value='case') as submit:
++            app.run(timeout=30)
++        self.assertFalse(app.exception)
++        task = submit.call_args.args[0]
++        self.assertEqual(app.session_state['case_investigation_case'], task['id'])
++        self.assertEqual(app.session_state['nav_page'], 'Cases')
++        self.assertIn('background', app.session_state['workspace_notice'])
++
++    def view(self, *, actor='alice', status='awaiting_review', pending=None, values=None):
++        task = dict(id='run', actor='alice', query='Example incident', status=status, revision=4)
++        snapshot = SimpleNamespace(values=values or {}, tasks=[SimpleNamespace(
++            interrupts=[SimpleNamespace(value=pending)] if pending else [])])
++
++        @contextmanager
++        def session(*args, **kwargs):
++            yield SimpleNamespace(inspect=lambda *args: snapshot)
++
++        app = AppTest.from_string('''
++import streamlit as st
++from research_app.investigation_detail import render_live
++st.session_state['research_user'] = st.session_state['viewer']
++render_live(st.session_state['task'], case_id='case')
++''')
++        app.session_state['viewer'] = actor
++        app.session_state['task'] = task
++        return app, task, session
++
++    def run_view(self, app, task, session):
++        with patch('research_app.investigation_tasks.get_case_task', return_value=task), \
++             patch('research_app.hosted_session.open_hosted_session', session), \
++             patch('research_app.evidence_registry.annotate_state', side_effect=lambda _, state: state), \
++             patch('research_app.review_controls.get_task', return_value=task):
++            app.run(timeout=30)
++        self.assertFalse(app.exception)
++
++    def test_final_coding_is_reachable_inside_case(self):
++        pending = dict(stage='final_coding', search_run_id='search',
++                       fields={'city': {'claims': [], 'status': 'Unclear'}})
++        app, task, session = self.view(pending=pending, values={'profile': {'city': {}}})
++        self.run_view(app, task, session)
++        self.assertIn('Submit coding review', [button.label for button in app.button])
++        self.assertTrue(any('complete coding' in item.value for item in app.info))
++
++    def test_owner_decision_draft_survives_refresh_and_queues_once(self):
++        pending = dict(search_run_id='search', next_queries=[dict(query='Follow up',
++            target_gap='incident date', reason='Resolve conflicting dates', based_on_ranks=[1])])
++        app, task, session = self.view(pending=pending,
++            values={'results': [dict(result_rank=1, title='Report', snippet='Conflicting dates')]})
++        self.run_view(app, task, session)
++        app.text_area[0].set_value('Check later report')
++        self.run_view(app, task, session)
++        self.assertEqual(app.text_area[0].value, 'Check later report')
++        self.assertTrue(any('Resolve conflicting dates' in item.value for item in app.markdown))
++        with patch('research_app.review_controls.enqueue') as enqueue:
++            app.button[0].click()
++            self.run_view(app, task, session)
++            enqueue.assert_called_once()
++        task['status'] = 'queued'
++        self.run_view(app, task, session)
++        self.assertEqual(len(app.button), 0)
++        pending['search_run_id'] = 'next-search'
++        task['status'] = 'awaiting_review'
++        self.run_view(app, task, session)
++        self.assertEqual(app.text_area[0].value, '')
++
++    def test_other_researcher_has_findings_without_decision_controls(self):
++        app, task, session = self.view(actor='bob', pending={'next_queries': []})
++        self.run_view(app, task, session)
++        self.assertEqual(len(app.button), 0)
++        self.assertTrue(any('owner' in item.value for item in app.caption))
++
++    def test_failed_investigation_preserves_saved_activity(self):
++        app, task, session = self.view(status='failed', values={
++            'search_history': [{'query': 'Earlier search', 'search_run_id': 'search'}]})
++        self.run_view(app, task, session)
++        self.assertTrue(any('Saved evidence is preserved' in item.value for item in app.error))
++        self.assertIn('Search 1: Earlier search', [item.label for item in app.expander])
++
++    def test_case_selection_is_preserved_when_new_tasks_arrive(self):
++        tasks = [dict(id='new', query='New investigation', status='running'),
++                 dict(id='old', query='Selected investigation', status='finished')]
++        app = AppTest.from_string('''
++import streamlit as st
++from research_app.cases import _investigations
++_investigations({'id': 'case'}, active=True)
++''')
++        app.session_state['case_investigation_case'] = 'old'
++        with patch('research_app.cases.list_case_tasks', return_value=tasks), \
++             patch('research_app.investigation_detail.render_live') as render:
++            app.run(timeout=30)
++            self.assertFalse(app.exception)
++            self.assertEqual(render.call_args.args[0]['id'], 'old')
++            app.run(timeout=30)
++            self.assertEqual(render.call_args.args[0]['id'], 'old')

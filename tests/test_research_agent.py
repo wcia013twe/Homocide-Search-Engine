@@ -13,6 +13,7 @@ class ResearchAgentTests(unittest.TestCase):
                     SearchResult("Fixture article", "https://example.invalid/article", "Fixture excerpt"),
                 ))
                 search, record = Mock(return_value=response), Mock()
+                record.return_value.search_result_ids = ("result-one",)
                 state = build_research_graph(search, record).invoke({"query": PADMINI_QUERY, "provider": provider})
                 search.assert_called_once_with(provider, PADMINI_QUERY)
                 record.assert_called_once_with(response)

@@ -1,0 +1,95 @@
+"""Compact issue modal with a quiet sidebar hint for captured errors."""
+import json
+import os
+from uuid import uuid4
+
+import streamlit as st
+
+from research_app.issue_reporting import make_report, read_json, report_path, submit_report
+
+
+def _error_key(error):
+    return json.dumps({key: error.get(key) for key in ('operation', 'error_type', 'message', 'frames', 'investigation_id')}, sort_keys=True) if error else None
+
+
+@st.fragment(run_every="3s")
+def _error_hint():
+    error = st.session_state.get("issue_last_error")
+    key = _error_key(error)
+    if error and key != st.session_state.get("issue_reported_error"):
+        st.caption(":material/error_outline: Error detected")
+        if key not in st.session_state.get("issue_prompted_errors", set()) and not st.session_state.get("issue_dialog_open"):
+            st.session_state.setdefault("issue_prompted_errors", set()).add(key)
+            st.session_state["issue_dialog_open"] = True
+            st.session_state["issue_dialog_rendered"] = True
+            _report_dialog()
+
+
+def render():
+    st.session_state["issue_dialog_rendered"] = False
+    _error_hint()
+    if st.button("Report issue", icon=":material/bug_report:", key="issue_open"):
+        st.session_state["issue_dialog_open"] = True
+    if st.session_state.get("issue_dialog_open") and not st.session_state.get("issue_dialog_rendered"):
+        _report_dialog()
+
+
+def _dismiss_dialog():
+    st.session_state["issue_dialog_open"] = False
+
+
+@st.dialog("Report issue", width="small", on_dismiss=_dismiss_dialog)
+def _report_dialog():
+    page = st.session_state.get("nav_page", "Search")
+    error = st.session_state.get("issue_last_error")
+    st.caption("Public on GitHub. Please leave out private information.")
+    with st.form("issue_form", border=False):
+        description = st.text_area("What happened? (optional)", max_chars=2000,
+                                   placeholder="For example: A source button won't open.", key="issue_description")
+        attach_error = st.checkbox("Include error details", value=True, key="issue_attach_error") if error else False
+        if error:
+            st.caption("Technical details stay in Databricks.")
+        clicked = st.form_submit_button("Submit issue", key="issue_submit", type="primary")
+    if clicked:
+        if not os.environ.get("HR_ISSUE_REPORTER_JOB_ID"):
+            st.error("Issue delivery is not configured yet.")
+            return
+        error = error if attach_error else None
+        draft = json.dumps([page, description, error], sort_keys=True)
+        if st.session_state.get("issue_draft") != draft:
+            st.session_state["issue_draft"] = draft
+            st.session_state["issue_report_id"] = str(uuid4())
+        selected = st.session_state.get("selected_investigation")
+        case_id = (st.session_state.get("case_workspace_id") if page == 'Cases' else
+                   st.session_state.get("investigation_case_id") if page == 'Search' else None)
+        investigation_id = (st.session_state.get('case_investigation_' + case_id) if page == 'Cases' and case_id else
+                            selected.get("id") if page == 'Search' and isinstance(selected, dict) else None)
+        report = make_report(page, description, actor=st.session_state.get("research_user", ""),
+            case_id=case_id, investigation_id=investigation_id, error=error,
+            report_id=st.session_state["issue_report_id"])
+        try:
+            from databricks.sdk import WorkspaceClient
+
+            submit_report(WorkspaceClient(), os.environ["HR_SEARCH_AUDIT_VOLUME"],
+                          os.environ["HR_ISSUE_REPORTER_JOB_ID"], report)
+            st.session_state["issue_submitted_id"] = report['id']
+            st.session_state["issue_reported_error"] = _error_key(error)
+            st.success("Issue submitted.")
+        except Exception:
+            st.error("Could not confirm delivery. Try submitting again.")
+    report_id = st.session_state.get("issue_submitted_id")
+    if report_id:
+        if st.button("Get GitHub link", key="issue_get_link"):
+            from databricks.sdk import WorkspaceClient
+            from databricks.sdk.errors import NotFound
+
+            try:
+                receipt = read_json(WorkspaceClient(), report_path(os.environ['HR_SEARCH_AUDIT_VOLUME'], report_id, 'receipts'))
+                st.session_state["issue_receipt"] = receipt
+            except NotFound:
+                st.info("Creating the GitHub link. Check again shortly.")
+            except Exception:
+                st.error("Link unavailable. Your report is saved.")
+        receipt = st.session_state.get("issue_receipt")
+        if receipt and receipt['report_id'] == report_id:
+            st.link_button("Track on GitHub", receipt['issue_url'])

@@ -1,90 +1,79 @@
-"""Live web search."""
+"""Submit investigations and open their case workspace."""
+import os
+from research_app.investigation_tasks import database_configured
+from uuid import uuid4
 
-import requests
 import streamlit as st
+from research_app.issue_reporting import capture_error
 
-from research_app.providers import PROVIDERS, search_web
-from research_app.explore_search import extract_leads, lead_extractor
-from research_app.search_audit import AuditConfigurationError, SearchAuditStore
-def scoped_query(query: str, state: str = "", county: str = "", year: int | None = None) -> str:
-    county = county.strip()
-    if county and not county.lower().endswith(" county"):
-        county += " County"
-    parts = (query.strip(), county, state.strip(), str(year) if year is not None else "")
-    return " ".join(part for part in parts if part)
+from research_app import investigation_tasks
+from research_app.hosted_session import scoped_session_id
 
 
 def render(workspace: dict, save):
+    if st.session_state.get('investigation_case_id'):
+        from research_app.cases import open_case
+        st.caption('For case: ' + st.session_state['investigation_case_title'])
+        st.button('← Back to case', on_click=open_case, args=(st.session_state['investigation_case_id'],))
     st.title("Search")
-    st.caption("Discover sources on the web.")
-    provider = st.selectbox("Provider", list(PROVIDERS), key="search_live_provider")
-    live_query = st.text_input("Search the web", placeholder="Homicide research methods", key="search_live_query")
-    state_column, county_column, year_column = st.columns(3)
-    state = state_column.text_input("State (optional)", placeholder="Texas", key="search_live_state")
-    county = county_column.text_input("County (optional)", placeholder="Brazos", key="search_live_county")
-    year = year_column.number_input("Incident year (optional)", min_value=1800, max_value=2100,
-                                    value=None, step=1, placeholder="2023", key="search_live_year")
-    query = scoped_query(live_query, state, county, year)
-    st.caption("Filters add search terms. Results may include other locations or years; incident dates need checking.")
-    if live_query.strip() and (state.strip() or county.strip() or year is not None):
-        st.text(f"Search query: {query}")
-    mode = st.radio("Search mode", ["Search web", "explore-search"], horizontal=True, key="search_live_mode")
-    if mode == "explore-search":
-        st.caption("Find and save individual identifying details with their source excerpts. One useful detail is enough; the incident loop has not started.")
-    if st.button(mode, type="primary", disabled=not live_query.strip(), key="search_live_submit"):
-        st.session_state.pop("search_live_lead_notice", None)
+    st.caption("Start an investigation. Follow progress and review evidence inside its case.")
+    configured = database_configured() and all(os.environ.get(name) for name in (
+        "HR_SEARCH_AUDIT_VOLUME", "HR_SEARCH_AUDIT_WAREHOUSE_ID", "HR_RESEARCH_MODEL_ENDPOINT"))
+    if not configured:
+        st.info("Live investigations are not connected. Ask the app administrator to check shared storage, search, and model access.")
+    cases = []
+    cases_available = True
+    if configured and not st.session_state.get('investigation_case_id'):
         try:
-            extractor = lead_extractor() if mode == "explore-search" else None
-            with st.spinner(f"Searching {provider}..."):
-                response = search_web(provider, query)
-            st.session_state["search_live_results"] = response
-            record = None
-            try:
-                record = SearchAuditStore.from_environment().record(response, st.session_state["research_user"])
-                st.session_state["search_live_audit"] = f"Recorded search {record.search_run_id}."
-            except AuditConfigurationError:
-                st.session_state["search_live_audit"] = "Configure the audit volume and SQL warehouse to record this search."
-            except Exception:
-                st.session_state["search_live_audit"] = "Search succeeded, but the audit record could not be written."
-            if extractor is not None:
-                with st.spinner("Finding identifying details..."):
-                    leads = extract_leads(response, extractor, record.search_run_id if record else None)
-                existing = workspace.get("leads", [])
-                known = {lead["id"] for lead in existing}
-                new_leads = [lead for lead in leads if lead["id"] not in known]
-                if new_leads:
-                    workspace["leads"] = existing + new_leads
-                    if not save():
-                        return
-                st.session_state["search_live_lead_notice"] = (
-                    f"Saved {len(new_leads)} new identifying leads. Incident loop has not started."
-                    if leads else "No useful identifying details were found in these excerpts. Try another query."
-                )
-        except requests.RequestException:
-            st.error(f"{provider} Search could not complete the request. Try again shortly.")
-        except RuntimeError as exc:
-            st.error(str(exc))
-        except Exception:
-            st.error("Search or lead extraction could not finish. Check the provider and model configuration, then try again.")
-    if st.session_state.get("search_live_audit"):
-        st.caption(st.session_state["search_live_audit"])
-    if st.session_state.get("search_live_lead_notice"):
-        st.info(st.session_state["search_live_lead_notice"])
-    saved_leads = workspace.get("leads", [])
-    if saved_leads:
-        with st.expander(f"Saved identifying leads ({len(saved_leads)})"):
-            st.caption("Provisional details for follow-up searches. Multiple details can refer to the same incident.")
-            for lead in saved_leads:
-                st.write(lead["identifying_detail"])
-                st.caption(f'{lead["detail_type"]} | {lead["status"]} | Search: {lead["search_query"]}')
-                st.text(lead["supporting_excerpt"])
-                st.link_button("Open supporting source", lead["source_url"])
-    live_response = st.session_state.get("search_live_results")
-    for result in live_response.results if live_response else []:
-        with st.container(border=True):
-            st.subheader(result.title)
-            if result.published_date:
-                st.caption(result.published_date)
-            st.write(result.snippet or "No excerpt was returned.")
-            if result.url.startswith(("https://", "http://")):
-                st.link_button("Open result", result.url)
+            from research_app.collaboration import CaseStore
+            cases = CaseStore(st.session_state['research_user']).list_cases()
+        except Exception as issue_exc:
+            capture_error(issue_exc, "search.render")
+            cases_available = False
+            st.warning('Existing cases are temporarily unavailable. Try again when access is restored.')
+    st.session_state['search_case_options'] = [case['id'] for case in cases] if cases_available else []
+    with st.form("investigation_search", border=False):
+        if not st.session_state.get('investigation_case_id') and cases_available:
+            labels = {'__new_case__': 'Create a new case', **{case['id']: case['title'] + ' · ' + case['gold_key'] for case in cases}}
+            st.selectbox('Case', list(labels), index=None, placeholder='Choose a case', format_func=labels.get,
+                         key='search_target_case', help='Choose the case that will contain this investigation and its evidence.')
+        st.text_area("Investigation query", placeholder="Person's name, location, and any known incident details",
+                             height=100, key="search_live_query",
+                             help="Include a state or incident year when known. Results need source review.")
+        st.form_submit_button("Submit investigation", type="primary", disabled=not configured or not cases_available,
+                                         key="search_live_submit", on_click=_submit_investigation)
+
+
+def _submit_investigation():
+    if not st.session_state['search_live_query'].strip():
+        st.session_state['workspace_error'] = 'Enter a name, location, or incident detail to investigate.'
+        return
+    actor = st.session_state['research_user']
+    public_id = str(uuid4())
+    task = {'id': public_id, 'key': scoped_session_id(public_id, actor), 'actor': actor,
+            'query': st.session_state['search_live_query'].strip(),
+            'submitted_by_email': st.session_state.get('research_email', actor)}
+    target = st.session_state.get('investigation_case_id')
+    if not target:
+        choice = st.session_state.get('search_target_case')
+        if choice == '__new_case__':
+            target = None
+        elif choice in st.session_state.get('search_case_options', []):
+            target = choice
+        else:
+            st.session_state['workspace_error'] = 'Choose a case or create a new case before submitting.'
+            return
+    try:
+        case_id = investigation_tasks.submit(task, target_case=target) if target else investigation_tasks.submit(task)
+    except Exception as issue_exc:
+        capture_error(issue_exc, "search._submit_investigation")
+        st.session_state['workspace_error'] = 'Unable to submit investigation. Check backend configuration and logs.'
+        return
+    if case_id:
+        from research_app.cases import open_case
+        st.session_state.pop('investigation_case_id', None)
+        st.session_state.pop('investigation_case_title', None)
+        st.session_state.pop('search_target_case', None)
+        st.session_state['case_investigation_' + case_id] = public_id
+        st.session_state['workspace_notice'] = 'Investigation started. You can leave this page; research continues in the background.'
+        open_case(case_id)

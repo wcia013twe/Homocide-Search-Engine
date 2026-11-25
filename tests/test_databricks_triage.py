@@ -8,17 +8,31 @@ from research_app.research_triage import DatabricksTriage, PROMPT_VERSION
 class DatabricksTriageTests(unittest.TestCase):
     @patch("databricks.sdk.WorkspaceClient")
     @patch("research_app.research_triage.requests.post")
+    def test_planner_accepts_queries_without_reassessing_results(self, post, client):
+        client.return_value.config.host = "https://workspace.example"
+        response = Mock()
+        response.json.return_value = {"choices": [{"finish_reason": "stop", "message": {
+            "content": json.dumps({"next_queries": [{"query": "later update", "target_gap": "status",
+                                                     "reason": "Find updates", "based_on_ranks": [1]}]})}}]}
+        post.return_value = response
+        result = DatabricksTriage("test-model").plan_queries("seed", [{"result_rank": 1}], {})
+        self.assertEqual(result["next_queries"][0]["query"], "later update")
+        self.assertNotIn("assessments", result)
+
+    @patch("databricks.sdk.WorkspaceClient")
+    @patch("research_app.research_triage.requests.post")
     def test_real_adapter_validates_response_and_retains_model_exchange(self, post, client):
         client.return_value.config.host = "https://workspace.example"
         client.return_value.config.authenticate.return_value = {"Authorization": "Bearer TEST_ONLY"}
         output = {"assessments": [{"result_rank": 1, "label": "uncertain", "reason": "Insufficient excerpt",
-                                   "duplicate_of_rank": None}], "next_queries": []}
+                                   "duplicate_of_rank": None}], "next_queries": [{"query": "ungrounded", "target_gap": "age", "reason": "missing", "based_on_ranks": []}]}
         response = Mock()
         response.json.return_value = {"choices": [{"finish_reason": "stop", "message": {
             "content": json.dumps(output)}}], "model": "test-model", "usage": {"total_tokens": 100}}
         post.return_value = response
         result = DatabricksTriage("test-model")("seed", [{"result_rank": 1, "snippet": "x" * 7000}])
         self.assertEqual(result["prompt_version"], PROMPT_VERSION)
+        self.assertEqual(result["next_queries"], [])
         self.assertEqual(result["model_response"], response.json.return_value)
         user_input = json.loads(result["model_input"]["messages"][1]["content"])
         self.assertEqual(len(user_input["results"][0]["excerpt"]), 6000)

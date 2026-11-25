@@ -34,3 +34,14 @@ class HostedSessionTests(unittest.TestCase):
             with open_hosted_session("case-one"):
                 self.fail("Must not enter a busy session")
         build.assert_not_called()
+
+    @patch.dict(os.environ, {"HR_RESEARCH_CHECKPOINT_DSN": "postgresql://test-only"})
+    @patch("psycopg.connect")
+    @patch("research_app.hosted_session.build_session")
+    @patch("research_app.hosted_session.DatabricksTriage.from_environment")
+    @patch("research_app.hosted_session.SearchAuditStore.from_environment")
+    def test_progress_read_does_not_acquire_execution_lock(self, store, model, build, connect):
+        connection = connect.return_value.__enter__.return_value
+        with open_hosted_session("running-case", read_only=True) as session:
+            self.assertIs(session, build.return_value)
+        connection.execute.assert_not_called()

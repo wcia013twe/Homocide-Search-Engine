@@ -32,6 +32,7 @@ class SearchAuditRecord:
     raw_request_path: str
     raw_response_path: str
     raw_response_sha256: str
+    search_result_ids: tuple[str, ...] = ()
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -81,7 +82,8 @@ class SearchAuditStore:
         request_payload = {"provider": response.provider, "query": response.query, "request": response.request}
         _write_json(request_path, request_payload)
         response_hash = _write_json(response_path, response.raw_response)
-        record = SearchAuditRecord(run_id, str(request_path), str(response_path), response_hash)
+        record = SearchAuditRecord(run_id, str(request_path), str(response_path), response_hash,
+                                   tuple(str(uuid4()) for _ in response.results))
         self._insert_rows(record, response, actor, now)
         return record
 
@@ -170,7 +172,7 @@ class SearchAuditStore:
         """
         result_values = [
             [
-                str(uuid4()),
+                record.search_result_ids[rank - 1] if record.search_result_ids else str(uuid4()),
                 record.search_run_id,
                 rank,
                 response.provider,

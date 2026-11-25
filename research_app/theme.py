@@ -5,13 +5,16 @@ import streamlit as st
 def apply_theme():
     st.markdown('''<style>
     .stApp { color: #202c35; }
-    .block-container { max-width: 1480px; padding-top: 2.1rem; padding-bottom: 3rem; }
+    .block-container { max-width: 1480px; padding-top: 2.5rem; padding-bottom: 3rem; }
     [data-testid="stSidebar"] { border-right: 1px solid #e3e8eb; }
     [data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
     h1 { font-size: 2rem !important; font-weight: 650 !important; letter-spacing: -0.025em; }
     h2 { font-size: 1.35rem !important; font-weight: 620 !important; }
     h3 { font-size: 1.1rem !important; font-weight: 600 !important; }
     p, label { line-height: 1.55; }
+    h1, h2, h3 { overflow-wrap: anywhere; }
+    a { text-underline-offset: .2em; }
+    [data-testid="stMarkdownContainer"] > p { max-width: 75ch; }
     [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p,
     [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p { color: #586671 !important; }
     [data-testid="stCaptionContainer"] { opacity: 1 !important; }

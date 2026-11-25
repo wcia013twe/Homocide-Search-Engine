@@ -10,4 +10,4 @@ PROVIDERS = {"Exa": exa_search, "Brave": brave_response}
 def search_web(provider: str, query: str) -> SearchResponse:
     if provider not in PROVIDERS:
         raise ValueError(f"Unsupported search provider: {provider}")
-    return PROVIDERS[provider](query)
+    return PROVIDERS[provider](query, max_results=35 if provider == "Exa" else 20)

@@ -1,0 +1,48 @@
+--- a/app.py
++++ b/app.py
+@@ -1,5 +1,4 @@
+ """Databricks Apps entrypoint for the UI-first research workspace."""
+-import json
+ import os
+ import uuid
+ from pathlib import Path
+@@ -68,21 +67,6 @@
+     render_issue_form()
+     st.divider()
+     st.caption("Search → Cases → Dataset")
+-    with st.expander("Workspace snapshots"):
+-        st.caption("Personal workspace snapshots are local to this app instance. Shared cases and approvals are saved separately in Postgres.")
+-        st.download_button("Download workspace", lambda workspace=st.session_state.workspace: json.dumps(workspace, indent=2, ensure_ascii=False), "research-workspace.json", "application/json", use_container_width=True)
+-        incoming = st.file_uploader("Restore workspace snapshot", type=["json"], key="snapshot_upload")
+-        if incoming and st.button("Restore snapshot", use_container_width=True):
+-            try:
+-                if incoming.size > 10 * 1024 * 1024:
+-                    raise ValueError("Snapshot must be smaller than 10 MB.")
+-                payload = json.loads(incoming.getvalue())
+-                revision = repo.save(payload, st.session_state.revision)
+-                st.session_state.workspace = payload
+-                st.session_state.revision = revision
+-                st.rerun()
+-            except (ValueError, TypeError, ConflictError) as exc:
+-                st.error(f"Snapshot could not be restored: {exc}")
+ 
+ if st.session_state.get("workspace_notice"):
+     st.success(st.session_state.pop("workspace_notice"))
+--- a/research_app/guide.py
++++ b/research_app/guide.py
+@@ -42,13 +42,8 @@
+         st.subheader('Understand Usage')
+         st.write('Usage shows your live investigations, known provider costs, and success rate. Choose the search provider and model endpoint for new investigations. Exa search costs are estimates. Databricks model endpoint costs are workspace-wide list-price estimates and may include other users; billing can be delayed.')
+     with backup:
+-        st.subheader('Shared research and personal snapshots')
+-        st.write('Shared investigations, evidence, cases, and approvals are saved in the configured shared storage. Published records are saved in the dataset table. Personal workspace snapshots are local to the app instance and do not back up this shared research.')
+-        st.markdown('''
+-1. Expand **Workspace snapshots** in the sidebar and select **Download workspace** to save the personal workspace as JSON.
+-2. To restore it, upload the JSON under **Restore workspace snapshot**, then select **Restore snapshot**. The file must be smaller than 10 MB.
+-3. Download a backup before restoring: restoration replaces the current personal workspace.
+-''')
++        st.subheader('Your research is saved')
++        st.write('Saved investigations, evidence, cases, and approvals are available when you return. Published records appear in Dataset.')
+         st.subheader('Access and troubleshooting')
+         st.markdown('''
+ - **Cannot open the app:** Ask the administrator to grant your Databricks identity access, then sign in with your own account.

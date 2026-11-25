@@ -23,7 +23,7 @@ class SessionAPITests(unittest.TestCase):
                     "based_on_ranks": [1]}]})
 
             @contextmanager
-            def local_backend(unused_key):
+            def local_backend(unused_key, *, read_only=False):
                 with open_session(directory, model, search, max_searches=2) as session:
                     yield session
 

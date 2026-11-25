@@ -1,0 +1,29 @@
+--- a/research_app/issue_ui.py
++++ b/research_app/issue_ui.py
+@@ -21,14 +21,16 @@
+         if key not in st.session_state.get("issue_prompted_errors", set()) and not st.session_state.get("issue_dialog_open"):
+             st.session_state.setdefault("issue_prompted_errors", set()).add(key)
+             st.session_state["issue_dialog_open"] = True
+-            st.rerun(scope="app")
++            st.session_state["issue_dialog_rendered"] = True
++            _report_dialog()
+ 
+ 
+ def render():
++    st.session_state["issue_dialog_rendered"] = False
+     _error_hint()
+     if st.button("Report issue", icon=":material/bug_report:", key="issue_open"):
+         st.session_state["issue_dialog_open"] = True
+-    if st.session_state.get("issue_dialog_open"):
++    if st.session_state.get("issue_dialog_open") and not st.session_state.get("issue_dialog_rendered"):
+         _report_dialog()
+ 
+ 
+--- a/app.yaml
++++ b/app.yaml
+@@ -30,4 +30,4 @@
+   - name: HR_ISSUE_REPORTER_JOB_ID
+     valueFrom: issue_reporter
+   - name: HR_APP_VERSION
+-    value: 'issue-reporting-v3'
++    value: 'issue-reporting-v3.1'

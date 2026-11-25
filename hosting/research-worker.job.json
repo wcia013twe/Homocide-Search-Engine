@@ -1,0 +1,51 @@
+{
+  "name": "homicide-research-worker",
+  "max_concurrent_runs": 4,
+  "schedule": {
+    "quartz_cron_expression": "0 * * * * ?",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "tasks": [
+    {
+      "task_key": "drain_commands",
+      "spark_python_task": {
+        "python_file": "/Workspace/Users/wcia013twe@gmail.com/homicide-research-ui/hosting/run_worker.py",
+        "parameters": [
+          "--lakebase-endpoint",
+          "projects/homicide-research/branches/production/endpoints/primary",
+          "--db-host",
+          "ep-little-rice-d8rdi7t4.database.us-east-2.cloud.databricks.com",
+          "--db-name",
+          "databricks_postgres",
+          "--db-user",
+          "wcia013twe@gmail.com",
+          "--audit-volume",
+          "/Volumes/homicide_research/research/sources_documents",
+          "--warehouse-id",
+          "a5e11b7fe2c6dbbc",
+          "--model-endpoint",
+          "databricks-gpt-oss-20b",
+          "--secret-scope",
+          "homicide-research-dev"
+        ]
+      },
+      "environment_key": "research",
+      "max_retries": 0
+    }
+  ],
+  "environments": [
+    {
+      "environment_key": "research",
+      "spec": {
+        "environment_version": "5",
+        "dependencies": [
+          "-r /Workspace/Users/wcia013twe@gmail.com/homicide-research-ui/hosting/requirements.txt"
+        ]
+      }
+    }
+  ],
+  "queue": {
+    "enabled": true
+  }
+}
